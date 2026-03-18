@@ -1,0 +1,20 @@
+[project]
+name = "bknet"
+version = "0.1.0"
+description = "A general quant trading engine."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "cython>=3.2.4",
+    "gufo-http>=0.7.0",
+    "orjson>=3.11.7",
+    "picows>=1.16.0",
+    'winloop>=0.5.0; sys_platform == "win32"',
+    'uvloop>=0.22.1; sys_platform != "win32"',
+    "ipykernel>=7.2.0",
+    "curl-cffi>=0.14.0",
+    "pandas>=3.0",
+    "pyyaml>=6.0.3",
+    "pycryptodome>=3.23.0",
+    "pybase64>=1.4.3",
+]
