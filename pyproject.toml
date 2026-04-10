@@ -17,4 +17,7 @@ dependencies = [
     "pyyaml>=6.0.3",
     "pycryptodome>=3.23.0",
     "pybase64>=1.4.3",
+    "pyarrow>=23.0.1",
+    "matplotlib>=3.10.8",
+    "statsmodels>=0.14.6",
 ]

@@ -9,8 +9,8 @@ from orjson import loads as orjson_loads
 from picows import WSFrame
 from pybase64 import b64decode
 
-from bknet.src import ForceNew, HttpWrapper, WebsocketWrapper
 from bknet.kis.tr_websocket import WebsocketTr
+from bknet.src import ForceNew, HttpWrapper, WebsocketWrapper
 
 
 class KisHttpClient(HttpWrapper, ForceNew):
@@ -138,7 +138,7 @@ class KisWsClient(WebsocketWrapper):
         on_disconnected: Callable[[Self], None],
         on_frame: dict[type[WebsocketTr], Callable[[Self, list[bytes]], None]],
         url: str = 'ws://ops.koreainvestment.com:21000',
-    ) -> KisWsClient:
+    ) -> 'KisWsClient':
         """Websocket client for KIS open API.
         
         Args:
@@ -158,7 +158,7 @@ class KisWsClient(WebsocketWrapper):
             instance._callbacks[tr.TrId.encode()] = (tr.TrLength, callback)
         return instance
 
-    def _on_frame_wrapper(self: KisWsClient, frame: WSFrame):
+    def _on_frame_wrapper(self: 'KisWsClient', frame: WSFrame):
         """on_frame wrapper.
 
         Handles decryping encrypted messages, parsing JSON messages, and dispatching messages to the appropriate callbacks based on tr_id.
