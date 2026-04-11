@@ -1,5 +1,6 @@
+import asyncio
 import datetime
-from typing import Callable, Self, Tuple
+from typing import Callable, Dict, Optional, Self, Tuple
 
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
@@ -35,6 +36,10 @@ class KisHttpClient(HttpWrapper, ForceNew):
     websocket_key: str
     """Websocket access key for KIS websocket connection."""
 
+    # API rate limit management
+    _api_limit_queue: asyncio.Queue[None]
+    _task_api_limit_refresh: Optional[asyncio.Task]
+
     @classmethod
     async def New(
         cls, 
@@ -42,6 +47,7 @@ class KisHttpClient(HttpWrapper, ForceNew):
         appsecret: str,
         custtype: str = 'P',
         url: str = 'https://openapi.koreainvestment.com:9443',
+        api_limit: int = 19,
         *args, **kwargs
     ):
         """Http client for KIS open API.
@@ -51,19 +57,50 @@ class KisHttpClient(HttpWrapper, ForceNew):
             appsecret: API app secret issued by KIS.
             custtype: Customer type. 'P' for individual, 'B' for corporate. Default is 'P'.
             url: Base URL for the KIS open API. Default is 'https://openapi.koreainvestment.com:9443'.
+            api_limit: Maximum number of API requests per second. Default is 19, which is the documented 20 - 1(buffer) for the KIS open API.
         """
         instance = cls(cls._prevented)
         instance.client = HttpClient(*args, **kwargs)
         instance.url = url
-
         instance.appkey = appkey
         instance.appsecret = appsecret
         instance.custtype = custtype
+        # Initialize API rate limit queue
+        instance._api_limit_queue = asyncio.Queue(maxsize=api_limit)
+        for _ in range(api_limit):
+            instance._api_limit_queue.put_nowait(None)
+        async def _refresh_api_limit():
+            sleep_time = 1.0 / api_limit
+            while True:
+                await asyncio.sleep(sleep_time)
+                if instance._api_limit_queue.full():
+                    continue
+                instance._api_limit_queue.put_nowait(None)
+        instance._task_api_limit_refresh = asyncio.create_task(_refresh_api_limit())
+
+        # Connect and authenticate with the KIS open API to obtain tokens
         await instance.connect()
         return instance
 
+    def api_limit_reached(self) -> bool:
+        """Return True if the API Limit is reached."""
+        return self._api_limit_queue.empty()
+
+    async def request(
+        self,
+        method: RequestMethod,
+        params: Optional[str] = None,
+        body: Optional[bytes] = None,
+        headers: Optional[Dict[str, bytes]] = None
+    ) -> Response:
+        """Make an authenticated request to the KIS open API, respecting the API rate limit."""
+        await self._api_limit_queue.get() # Wait for an available API slot based on the rate limit
+        return await self.client.request(method, f'{self.url}{params}' if (params is not None) else self.url, body, headers if (headers is not None) else self.client.headers) # type: ignore
+
     async def connect(self):
         """Authenticate with the KIS open API and obtain the necessary tokens for API access and websocket connection.
+        
+        - This method internally consumes 2 API calls for authentication.
         """
         # Get OAuth2 token
         resp: Response = await self.request(
@@ -95,23 +132,6 @@ class KisHttpClient(HttpWrapper, ForceNew):
             'tr_id': b'', # to be set per-request
         }
 
-    async def kr_future_board(self, mrkt_cls_code: str):
-        """국내옵션전광판_선물
-
-        Args:
-            mrkt_cls_code: 시장구분코드
-                - 공백: KOSPI200
-                - MKI: 미니 KOSPI200
-                - WKM: KOSPI200위클리(월)
-                - WKI: KOSPI200위클리(목)
-                - KQI: KOSDAQ150
-        """
-        self.client.headers['tr_id'] = b'FHPIF05030200' # type: ignore
-        return await self.request(
-            RequestMethod.GET, # type: ignore
-            params=f'/uapi/domestic-futureoption/v1/quotations/display-board-futures?FID_COND_MRKT_DIV_CODE=F&FID_COND_SCR_DIV_CODE=20503&FID_COND_MRKT_CLS_CODE={mrkt_cls_code}',
-        )
-    
 
 class KisWsClient(WebsocketWrapper):
     """Websocket client for KIS open API.
@@ -130,6 +150,9 @@ class KisWsClient(WebsocketWrapper):
     _callbacks: dict[bytes, Tuple[int, Callable[[Self, list[bytes]], None]]] = {}
     """Dictionary mapping tr_id (as bytes) to a tuple of (tr_length, callback function). The callback function is called when a message with the corresponding tr_id is received. Signature of callback functions: (KisWsClient, list[bytes]) -> None"""
 
+    _callback_default: Callable[[Self, list[bytes]], None] = lambda self, msg: None
+    """Default callback function that is called when a message with an unregistered tr_id is received. Signature: (KisWsClient, list[bytes]) -> None"""
+
     @classmethod
     async def New(
         cls,
@@ -137,6 +160,7 @@ class KisWsClient(WebsocketWrapper):
         on_connected: Callable[[Self], None],
         on_disconnected: Callable[[Self], None],
         on_frame: dict[type[WebsocketTr], Callable[[Self, list[bytes]], None]],
+        on_frame_default: Callable[[Self, list[bytes]], None] = lambda self, msg: None,
         url: str = 'ws://ops.koreainvestment.com:21000',
     ) -> 'KisWsClient':
         """Websocket client for KIS open API.
@@ -156,6 +180,7 @@ class KisWsClient(WebsocketWrapper):
             if not callable(callback):
                 raise ValueError(f'on_frame values must be of type Callable with signature (KisWsClient, list[bytes]) -> None, got {type(callback)}')
             instance._callbacks[tr.TrId.encode()] = (tr.TrLength, callback)
+        instance._callback_default = on_frame_default
         return instance
 
     def _on_frame_wrapper(self: 'KisWsClient', frame: WSFrame):
@@ -185,13 +210,14 @@ class KisWsClient(WebsocketWrapper):
         if msg_view[0] == 49: # Decrypt message
             msg_byte = unpad(AES.new(self._aes_key, AES.MODE_CBC, self._aes_iv).decrypt(b64decode(msg_byte)), 16)
         
-        trlen, callback = self._callbacks.get(
-            msg_view[2:10].tobytes(), # tr_id is located at bytes 2-9 of the raw message
-            (0, lambda client, msg: print('Callback not found for tr_id:', msg_view[2:10].tobytes()))
-        )
+        # tr_id is located at bytes 2-9 of the raw message
+        trlen, callback = self._callbacks.get(msg_view[2:10].tobytes(), (0, None))
 
         msg_cnt = int(msg_view[11:14])
         msg_splited = msg_byte.split(b'^')
+        if callback is None:
+            self._callback_default(self, msg_splited)
+            return
         if msg_cnt == 1:
             callback(self, msg_splited)
             return

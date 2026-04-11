@@ -1,185 +1,214 @@
-from typing import Union
+import asyncio
+from typing import Callable, Literal, Union
 
 from gufo.http import RequestMethod, Response
+from orjson import loads as orjson_loads
 
 from bknet.kis.core import KisHttpClient
 
 
-
 class OrderSide:
     Buy = "B"
-    "매수"
+    "['B'] 매수"
     Sell = "S"
-    "매도"
+    "['S'] 매도"
 
-class OrderType:
+class KrOrderKind:
     pass
 
-class OrderTypeKRX(OrderType):
+OrderKindKRXvT = Literal['00', '01', '02', '03', '04', '05', '06', '07', '11', '12', '13', '14', '15', '16', '21', '22', '23', '24']
+class OrderKindKRX(KrOrderKind):
     Limit        = '00'
-    "지정가"
+    "['00'] 지정가"
     Market       = '01'
-    "시장가"
+    "['01'] 시장가"
     CondLimit    = '02'
-    "조건부지정가"
+    "['02'] 조건부지정가"
     BestMarket   = '03'
-    "최유리지정가"
+    "['03'] 최유리지정가"
     BestLimit    = '04'
-    "최우선지정가"
+    "['04'] 최우선지정가"
     BeforeMarket = '05'
-    "장전시간외"
+    "['05'] 장전시간외"
     AfterMarket  = '06'
-    "장후시간외"
+    "['06'] 장후시간외"
     SinglePriceAuction = '07'
-    "시간외단일가"
+    "['07'] 시간외단일가"
     IOCLimit     = '11'
-    "IOC지정가"
+    "['11'] IOC지정가"
     FOKLimit     = '12'
-    "FOK지정가"
+    "['12'] FOK지정가"
     IOCMarket    = '13'
-    "IOC시장가"
+    "['13'] IOC시장가"
     FOKMarket    = '14'
-    "FOK시장가"
+    "['14'] FOK시장가"
     IOCBestMarket = '15'
-    "IOC최유리시장가"
+    "['15'] IOC최유리시장가"
     FOKBestMarket = '16'
-    "FOK최유리시장가"
+    "['16'] FOK최유리시장가"
     MidPrice     = '21'
-    "중간가"
+    "['21'] 중간가"
     StopLimit    = '22'
-    "스톱지정가 - 현재 bknet에서 지원 X"
+    "['22'] 스톱지정가 - 현재 bknet에서 지원 X"
     MidIOC       = '23'
-    "중간가IOC"
+    "['23'] 중간가IOC"
     MidFOK       = '24'
-    "중간가FOK"
+    "['24'] 중간가FOK"
 
-class OrderTypeNXT(OrderType):
+class OrderKindNXT(KrOrderKind):
     Limit        = '00'
-    "지정가"
+    "['00'] 지정가"
     BestMarket   = '03'
-    "최유리지정가"
+    "['03'] 최유리지정가"
     BestLimit    = '04'
-    "최우선지정가"
+    "['04'] 최우선지정가"
     IOCLimit     = '11'
-    "IOC지정가"
+    "['11'] IOC지정가"
     FOKLimit     = '12'
-    "FOK지정가"
+    "['12'] FOK지정가"
     IOCMarket    = '13'
-    "IOC시장가"
+    "['13'] IOC시장가"
     FOKMarket    = '14'
-    "FOK시장가"
+    "['14'] FOK시장가"
     IOCBestMarket = '15'
-    "IOC최유리시장가"
+    "['15'] IOC최유리시장가"
     FOKBestMarket = '16'
-    "FOK최유리시장가"
+    "['16'] FOK최유리시장가"
     MidPrice     = '21'
-    "중간가"
+    "['21'] 중간가"
     StopLimit    = '22'
-    "스톱지정가"
+    "['22'] 스톱지정가"
     MidIOC       = '23'
-    "중간가IOC"
+    "['23'] 중간가IOC"
     MidFOK       = '24'
-    "중간가FOK"
+    "['24'] 중간가FOK"
 
-class OrderTypeSOR(OrderType):
+class OrderKindSOR(KrOrderKind):
     Limit        = '00'
-    "지정가"
+    "['00'] 지정가"
     Market       = '01'
-    "시장가"
+    "['01'] 시장가"
     BestMarket   = '03'
-    "최유리지정가"
+    "['03'] 최유리지정가"
     BestLimit    = '04'
-    "최우선지정가"
+    "['04'] 최우선지정가"
     IOCLimit     = '11'
-    "IOC지정가"
+    "['11'] IOC지정가"
     FOKLimit     = '12'
-    "FOK지정가"
+    "['12'] FOK지정가"
     IOCMarket    = '13'
-    "IOC시장가"
+    "['13'] IOC시장가"
     FOKMarket    = '14'
-    "FOK시장가"
+    "['14'] FOK시장가"
     IOCBestMarket = '15'
-    "IOC최유리시장가"
+    "['15'] IOC최유리시장가"
     FOKBestMarket = '16'
-    "FOK최유리시장가"
+    "['16'] FOK최유리시장가"
 
-class OrderAdjCanType:
+class OrderAdjCanKind:
     Cancel = '01'
-    "취소"
+    "['01'] 취소"
     Adjust = '02'
-    "정정"
+    "['02'] 정정"
 
-class RestKrStockOrder:
+class KisKrStkTradeRuntime:
+
+    http_client: KisHttpClient
+    cano: str
+    acnt_prdt_cd: str
+    custtype_binary: bytes
+    callbacks: dict[str, Callable[[dict], None]]
+    _order_queue: asyncio.Queue
+    _task_order_queue_process: asyncio.Task
 
     def __init__(
         self,
         http_client: KisHttpClient,
         cano: str,
         acnt_prdt_cd: str,
+        callbacks: dict[str, Callable[[dict], None]]
     ):
         self.http_client = http_client
         self.cano = cano
         self.acnt_prdt_cd = acnt_prdt_cd
         self.custtype_binary = http_client.custtype.encode()
+        self.callbacks = callbacks
+        
+        self._order_queue = asyncio.Queue()
+        self._task_order_queue_process = asyncio.create_task(self._process_orders())
 
-    async def order_cash(
+    async def _process_orders(self):
+        while True:
+            ord_method, ord_args = await self._order_queue.get()
+            if ord_method == 'order_cash':
+                resp = await self.http_client.request(
+                    method = RequestMethod.POST, # type: ignore
+                    params = '/uapi/domestic-stock/v1/trading/order-cash',
+                    body = f'{{"CANO":"{self.cano}","ACNT_PRDT_CD":"{self.acnt_prdt_cd}","PDNO":"{ord_args[2]}","ORD_DVSN":"{ord_args[1]}","ORD_QTY":"{ord_args[3]}","ORD_UNPR":"{ord_args[4]}","EXCG_ID_DVSN_CD":"{ord_args[5]}"}}'.encode(),
+                    headers = {'tr_id': b'TTTC0011U' if ord_args[0] == OrderSide.Sell else b'TTTC0012U', 'custtype': self.custtype_binary}
+                )
+            elif ord_method == 'order_adjcan':
+                resp =  await self.http_client.request(
+                    method = RequestMethod.POST, # type: ignore
+                    params = '/uapi/domestic-stock/v1/trading/order-cash',
+                    body = f'{{"CANO":"{self.cano}","ACNT_PRDT_CD":"{self.acnt_prdt_cd}","ORGN_ODNO":"{ord_args[2]}","ORD_DVSN":"{ord_args[1]}","RVSE_CNCL_DVSN_CD":"{ord_args[0]}","ORD_QTY":"{ord_args[3]}","ORD_UNPR":"{ord_args[4]}","QTY_ALL_ORD_YN":"{ord_args[5]}","EXCG_ID_DVSN_CD":"{ord_args[6]}"}}'.encode(),
+                    headers = {'tr_id': b'TTTC0013U', 'custtype': self.custtype_binary}
+                )
+            else:
+                # TODO
+                raise ValueError(f'Unknown order method: {ord_method}')
+            cb = self.callbacks.get(ord_method, None)
+            if cb is not None:
+                cb(orjson_loads(resp.content))
+
+    def order_cash(
         self,
         side: Union[str, OrderSide],
-        ordtype: Union[str, OrderType],
+        odrtype: Union[str, KrOrderKind],
         code: str,
-        ordqty: str,
-        ordprc: str,
+        odrqty: str,
+        odrprc: str,
         exgid: str = 'KRX'
-    ) -> Response:
+    ) -> None:
         """현금 주문
 
         https://apiportal.koreainvestment.com/apiservice-apiservice?/uapi/domestic-stock/v1/trading/order-cash
         
         Args:
             side: 주문 방향 (매수/매도)
-            ordtype: 주문 유형
+            odrtype: 주문 유형
             code: 종목 코드
-            ordqty: 주문 수량
-            ordprc: 주문 가격
+            odrqty: 주문 수량
+            odrprc: 주문 가격
             exgid: 거래소 (KRX/NXT/SOR)
         """
-        return await self.http_client.request(
-            method = RequestMethod.POST, # type: ignore
-            params = '/uapi/domestic-stock/v1/trading/order-cash',
-            body = f'{{"CANO":"{self.cano}","ACNT_PRDT_CD":"{self.acnt_prdt_cd}","PDNO":"{code}","ORD_DVSN":"{ordtype}","ORD_QTY":"{ordqty}","ORD_UNPR":"{ordprc}","EXCG_ID_DVSN_CD":"{exgid}"}}'.encode(),
-            headers = {'tr_id': b'TTTC0011U' if side == OrderSide.Sell else b'TTTC0012U', 'custtype': self.custtype_binary}
-        )
+        self._order_queue.put_nowait(('order_cash', (side, odrtype, code, odrqty, odrprc, exgid)))
 
-    async def order_adjcan(
+    def order_adjcan(
         self,
-        adjcan: Union[str, OrderAdjCanType],
-        ordtype: Union[str, OrderType],
-        ordno: str,
-        ordqty: str,
-        ordprc: str,
+        adjcan: Union[str, OrderAdjCanKind],
+        odrtype: Union[str, KrOrderKind],
+        odrno: str,
+        odrqty: str,
+        odrprc: str,
         allqty: str = 'Y',
         exgid: str = 'KRX'
-    ) -> Response:
+    ) -> None:
         """주문 정정/취소
 
         https://apiportal.koreainvestment.com/apiservice-apiservice?/uapi/domestic-stock/v1/trading/order-rvsecncl
         
         Args:
             adjcan: 정정/취소 구분
-            ordtype: 주문 유형
-            ordno: 원주문 번호
-            ordqty: 주문 수량
-            ordprc: 주문 가격
+            odrtype: 주문 유형
+            odrno: 원주문 번호
+            odrqty: 주문 수량
+            odrprc: 주문 가격
             allqty: 전량 주문 여부 (Y/N)
             exgid: 거래소 (KRX/NXT/SOR)
         """
-        return await self.http_client.request(
-            method = RequestMethod.POST, # type: ignore
-            params = '/uapi/domestic-stock/v1/trading/order-cash',
-            body = f'{{"CANO":"{self.cano}","ACNT_PRDT_CD":"{self.acnt_prdt_cd}","ORGN_ODNO":"{ordno}","ORD_DVSN":"{ordtype}","RVSE_CNCL_DVSN_CD":"{adjcan}","ORD_QTY":"{ordqty}","ORD_UNPR":"{ordprc}","QTY_ALL_ORD_YN":"{allqty}","EXCG_ID_DVSN_CD":"{exgid}"}}'.encode(),
-            headers = {'tr_id': b'TTTC0013U', 'custtype': self.custtype_binary}
-        )
-    
+        self._order_queue.put_nowait(('order_adjcan', (adjcan, odrtype, odrno, odrqty, odrprc, allqty, exgid)))
+
 
 class RestKrDerivatives:
 

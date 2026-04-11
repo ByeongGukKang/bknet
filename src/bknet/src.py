@@ -25,11 +25,13 @@ MACRO_AS_ASYNC = __MACRO_AS_ASYNC
 
 MACRO_ASYNC_SLEEP = asyncio.sleep
 MACRO_ASYNC_YIELD = coroutine(lambda: (yield))
-MACRO_TIME_NS = time.time_ns
+MACRO_TIMESTAMP_NS = time.time_ns
 MACRO_TIMESTAMP_MS = lambda: int(time.time() * 1000)
 MACRO_DATETIME_NOW = datetime.datetime.now
+MACRO_DATETIME_NOW_STR = lambda: datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
 MACRO_DATETIME_UTCNOW = lambda: datetime.datetime.now(datetime.timezone.utc)
-MACRO_TIME_PERF = time.perf_counter_ns
+MACRO_DATETIME_UTCNOW_STR = lambda: datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
+MACRO_PERF_COUNTER = time.perf_counter_ns
 
 
 def run_system(main: Coroutine):
@@ -59,6 +61,29 @@ class _MemoryPool:
         self.slots.append(obj)
 
 
+class LoggerWithBuffer:
+
+    def __init__(self, log_file_path: str, buffer_size: int = 256):
+        self.log_file_path = log_file_path
+        self.buffer: list = [None] * buffer_size
+        self.buffer_size = buffer_size
+        self.buffer_index = 0
+        self.fileIo = open(log_file_path, 'a')
+
+    def log(self, message: str):
+        self.buffer[self.buffer_index] = message
+        self.buffer_index += 1
+        if self.buffer_index >= self.buffer_size:
+            self.fileIo.writelines(self.buffer)
+            self.buffer_index = 0
+
+    def close(self):
+        if self.buffer_index > 0:
+            self.fileIo.writelines(self.buffer[:self.buffer_index])
+        self.fileIo.flush()
+        self.fileIo.close()
+
+
 class ForceNew:
 
     _prevented = object()
@@ -80,8 +105,7 @@ class HttpWrapper(ForceNew):
         body: Optional[bytes] = None,
         headers: Optional[Dict[str, bytes]] = None
     ) -> Response:
-        return await self.client.request(method, f'{self.url}{params}' if params else self.url, body, headers if headers else self.client.headers) # type: ignore
-
+        return await self.client.request(method, f'{self.url}{params}' if (params is not None) else self.url, body, headers if (headers is not None) else self.client.headers) # type: ignore
 
 class _WebsocketClient(WSListener):
     
