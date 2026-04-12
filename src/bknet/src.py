@@ -125,7 +125,6 @@ class _WebsocketClient(WSListener):
         """
         raise NotImplementedError()
 
-
 class WebsocketWrapper(ForceNew):
 
     disconnected_event: asyncio.Event

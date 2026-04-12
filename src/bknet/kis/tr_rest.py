@@ -1,5 +1,6 @@
 import asyncio
-from typing import Callable, Literal, Union
+from enum import StrEnum
+from typing import Callable, Union
 
 from gufo.http import RequestMethod, Response
 from orjson import loads as orjson_loads
@@ -7,16 +8,15 @@ from orjson import loads as orjson_loads
 from bknet.kis.core import KisHttpClient
 
 
-class OrderSide:
+class OrderSide(StrEnum):
     Buy = "B"
     "['B'] 매수"
     Sell = "S"
     "['S'] 매도"
 
-class KrOrderKind:
+class KrOrderKind(StrEnum):
     pass
 
-OrderKindKRXvT = Literal['00', '01', '02', '03', '04', '05', '06', '07', '11', '12', '13', '14', '15', '16', '21', '22', '23', '24']
 class OrderKindKRX(KrOrderKind):
     Limit        = '00'
     "['00'] 지정가"
@@ -105,7 +105,7 @@ class OrderKindSOR(KrOrderKind):
     FOKBestMarket = '16'
     "['16'] FOK최유리시장가"
 
-class OrderAdjCanKind:
+class OrderAdjCanKind(StrEnum):
     Cancel = '01'
     "['01'] 취소"
     Adjust = '02'
@@ -164,7 +164,7 @@ class KisKrStkTradeRuntime:
     def order_cash(
         self,
         side: Union[str, OrderSide],
-        odrtype: Union[str, KrOrderKind],
+        odrkind: Union[str, KrOrderKind],
         code: str,
         odrqty: str,
         odrprc: str,
@@ -176,18 +176,18 @@ class KisKrStkTradeRuntime:
         
         Args:
             side: 주문 방향 (매수/매도)
-            odrtype: 주문 유형
+            odrkind: 주문 유형
             code: 종목 코드
             odrqty: 주문 수량
             odrprc: 주문 가격
             exgid: 거래소 (KRX/NXT/SOR)
         """
-        self._order_queue.put_nowait(('order_cash', (side, odrtype, code, odrqty, odrprc, exgid)))
+        self._order_queue.put_nowait(('order_cash', (side, odrkind, code, odrqty, odrprc, exgid)))
 
     def order_adjcan(
         self,
         adjcan: Union[str, OrderAdjCanKind],
-        odrtype: Union[str, KrOrderKind],
+        odrkind: Union[str, KrOrderKind],
         odrno: str,
         odrqty: str,
         odrprc: str,
@@ -200,14 +200,14 @@ class KisKrStkTradeRuntime:
         
         Args:
             adjcan: 정정/취소 구분
-            odrtype: 주문 유형
+            odrkind: 주문 유형
             odrno: 원주문 번호
             odrqty: 주문 수량
             odrprc: 주문 가격
             allqty: 전량 주문 여부 (Y/N)
             exgid: 거래소 (KRX/NXT/SOR)
         """
-        self._order_queue.put_nowait(('order_adjcan', (adjcan, odrtype, odrno, odrqty, odrprc, allqty, exgid)))
+        self._order_queue.put_nowait(('order_adjcan', (adjcan, odrkind, odrno, odrqty, odrprc, allqty, exgid)))
 
 
 class RestKrDerivatives:
@@ -221,11 +221,11 @@ class RestKrDerivatives:
         Args:
             http_client: KisHttpClient 인스턴스
             mrkt_cls_code: 시장구분코드
-                - 공백: KOSPI200
-                - MKI: 미니 KOSPI200
-                - WKM: KOSPI200위클리(월)
-                - WKI: KOSPI200위클리(목)
-                - KQI: KOSDAQ150
+                - '': KOSPI200
+                - 'MKI': 미니 KOSPI200
+                - 'WKM': KOSPI200위클리(월)
+                - 'WKI': KOSPI200위클리(목)
+                - 'KQI': KOSDAQ150
         """
         http_client.client.headers['tr_id'] = b'FHPIF05030200' # type: ignore
         return await http_client.request(

@@ -110,7 +110,10 @@ class KisHttpClient(HttpWrapper, ForceNew):
             headers = {'content-type': b'application/json; charset=utf-8'}
         )
         resp_json = orjson_loads(resp.content)
-        self.auth_token: str = resp_json['access_token']
+        try:
+            self.auth_token: str = resp_json['access_token']
+        except KeyError:
+            raise ValueError(f'Authentication failed. Response: {resp_json}')
         self.auth_token_expiry: datetime.datetime = datetime.datetime.now() + datetime.timedelta(seconds=int(resp_json['expires_in'])-60) # 1 minute buffer
 
         # Get Websocket Access Key
@@ -120,7 +123,11 @@ class KisHttpClient(HttpWrapper, ForceNew):
             body = f'{{"grant_type":"client_credentials","appkey":"{self.appkey}","secretkey":"{self.appsecret}"}}'.encode(),
             headers = {'content-type': b'application/json; charset=utf-8'}
         )
-        self.websocket_key: str = orjson_loads(resp.content)['approval_key']
+        resp_json = orjson_loads(resp.content)
+        try:
+            self.websocket_key: str = resp_json['approval_key']
+        except KeyError:
+            raise ValueError(f'Failed to obtain websocket key. Response: {resp_json}')
 
         # Set default headers for authenticated requests
         self.client.headers = {

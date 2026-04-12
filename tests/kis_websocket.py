@@ -1,8 +1,9 @@
 import asyncio
 
 from bknet.src import run_system
-from bknet.kis.core import KisHttpClient, KisWsClient
+from bknet.kis import KisHttpClient, KisWsClient
 from bknet.kis.tr_websocket import WsKrxStkBook
+
 
 async def main():
 
@@ -13,10 +14,10 @@ async def main():
 
     wsClient = await KisWsClient.New(
         http_client = httpClient,
-        on_connected = lambda self: print("Websocket connected"),
-        on_disconnected = lambda self: print("Websocket disconnected"),
+        on_connected = lambda self: print('Websocket connected'),
+        on_disconnected = lambda self: print('Websocket disconnected'),
         on_frame = {
-            WsKrxStkBook: lambda self, msg: print(f"Received frame: {msg}")
+            WsKrxStkBook: lambda self, msg: print(f'Received frame: {msg}')
         }
     )
     wsClient.subscribe(WsKrxStkBook.TrId, '005930')
