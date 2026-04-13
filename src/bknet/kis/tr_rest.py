@@ -116,8 +116,8 @@ class KisKrStkTradeRuntime:
     http_client: KisHttpClient
     cano: str
     acnt_prdt_cd: str
-    custtype_binary: bytes
     callbacks: dict[str, Callable[[dict], None]]
+    headers: dict[str, bytes]
     _order_queue: asyncio.Queue
     _task_order_queue_process: asyncio.Task
 
@@ -131,8 +131,15 @@ class KisKrStkTradeRuntime:
         self.http_client = http_client
         self.cano = cano
         self.acnt_prdt_cd = acnt_prdt_cd
-        self.custtype_binary = http_client.custtype.encode()
         self.callbacks = callbacks
+
+        self.headers = {
+            'content-type': b'application/json',
+            'authorization': http_client.client.headers['authorization'], # type: ignore
+            'appkey':    http_client.client.headers['appkey'],    # type: ignore
+            'appsecret': http_client.client.headers['appsecret'], # type: ignore
+            'custtype':  http_client.custtype.encode(),
+        }
         
         self._order_queue = asyncio.Queue()
         self._task_order_queue_process = asyncio.create_task(self._process_orders())
@@ -141,18 +148,20 @@ class KisKrStkTradeRuntime:
         while True:
             ord_method, ord_args = await self._order_queue.get()
             if ord_method == 'order_cash':
+                self.headers['tr_id'] = b'TTTC0011U' if ord_args[0] == 'S' else b'TTTC0012U'
                 resp = await self.http_client.request(
                     method = RequestMethod.POST, # type: ignore
                     params = '/uapi/domestic-stock/v1/trading/order-cash',
                     body = f'{{"CANO":"{self.cano}","ACNT_PRDT_CD":"{self.acnt_prdt_cd}","PDNO":"{ord_args[2]}","ORD_DVSN":"{ord_args[1]}","ORD_QTY":"{ord_args[3]}","ORD_UNPR":"{ord_args[4]}","EXCG_ID_DVSN_CD":"{ord_args[5]}"}}'.encode(),
-                    headers = {'tr_id': b'TTTC0011U' if ord_args[0] == OrderSide.Sell else b'TTTC0012U', 'custtype': self.custtype_binary}
+                    headers = self.headers
                 )
             elif ord_method == 'order_adjcan':
+                self.headers['tr_id'] = b'TTTC0013U'
                 resp =  await self.http_client.request(
                     method = RequestMethod.POST, # type: ignore
                     params = '/uapi/domestic-stock/v1/trading/order-cash',
                     body = f'{{"CANO":"{self.cano}","ACNT_PRDT_CD":"{self.acnt_prdt_cd}","ORGN_ODNO":"{ord_args[2]}","ORD_DVSN":"{ord_args[1]}","RVSE_CNCL_DVSN_CD":"{ord_args[0]}","ORD_QTY":"{ord_args[3]}","ORD_UNPR":"{ord_args[4]}","QTY_ALL_ORD_YN":"{ord_args[5]}","EXCG_ID_DVSN_CD":"{ord_args[6]}"}}'.encode(),
-                    headers = {'tr_id': b'TTTC0013U', 'custtype': self.custtype_binary}
+                    headers = self.headers
                 )
             else:
                 # TODO

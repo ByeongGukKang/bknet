@@ -61,6 +61,7 @@ class KisHttpClient(HttpWrapper, ForceNew):
         """
         instance = cls(cls._prevented)
         instance.client = HttpClient(*args, **kwargs)
+        instance.client.headers = {}
         instance.url = url
         instance.appkey = appkey
         instance.appsecret = appsecret
@@ -205,6 +206,7 @@ class KisWsClient(WebsocketWrapper):
                 return
             body = json_msg.get('body', {})
             if body.get('rt_cd', '') == '1': # Error message
+                print(f'Error message received from websocket: {json_msg}')
                 return 
             if len(self._aes_iv) == 0:
                 self._aes_iv  = body.get('output', {}).get('iv', '').encode('utf-8')
