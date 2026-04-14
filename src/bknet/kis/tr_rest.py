@@ -159,7 +159,7 @@ class KisKrStkTradeRuntime:
                 self.headers['tr_id'] = b'TTTC0013U'
                 resp =  await self.http_client.request(
                     method = RequestMethod.POST, # type: ignore
-                    params = '/uapi/domestic-stock/v1/trading/order-cash',
+                    params = '/uapi/domestic-stock/v1/trading/order-rvsecncl',
                     body = f'{{"CANO":"{self.cano}","ACNT_PRDT_CD":"{self.acnt_prdt_cd}","ORGN_ODNO":"{ord_args[2]}","ORD_DVSN":"{ord_args[1]}","RVSE_CNCL_DVSN_CD":"{ord_args[0]}","ORD_QTY":"{ord_args[3]}","ORD_UNPR":"{ord_args[4]}","QTY_ALL_ORD_YN":"{ord_args[5]}","EXCG_ID_DVSN_CD":"{ord_args[6]}"}}'.encode(),
                     headers = self.headers
                 )
