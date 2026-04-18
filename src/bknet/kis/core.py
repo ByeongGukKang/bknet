@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 from typing import Callable, Dict, Optional, Self, Tuple
+import weakref
 
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
@@ -72,12 +73,18 @@ class KisHttpClient(HttpWrapper, ForceNew):
             instance._api_limit_queue.put_nowait(None)
         async def _refresh_api_limit():
             sleep_time = 1.0 / api_limit
-            while True:
-                await asyncio.sleep(sleep_time)
-                if instance._api_limit_queue.full():
-                    continue
-                instance._api_limit_queue.put_nowait(None)
+            try:
+                while True:
+                    await asyncio.sleep(sleep_time)
+                    if instance._api_limit_queue.full():
+                        continue
+                    instance._api_limit_queue.put_nowait(None)
+            except asyncio.CancelledError:
+                pass
         instance._task_api_limit_refresh = asyncio.create_task(_refresh_api_limit())
+
+        # automatically cancel the API limit refresh task when the instance is garbage collected
+        weakref.finalize(instance, instance._task_api_limit_refresh.cancel)
 
         # Connect and authenticate with the KIS open API to obtain tokens
         await instance.connect()
