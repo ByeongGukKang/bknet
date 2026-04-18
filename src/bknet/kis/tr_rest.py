@@ -141,8 +141,8 @@ class KisKrStkTradeRuntime:
     "locId -> KrStkOrder"
     _orders_active: dict[str, dict[str, KrStkOrder]]
     "code -> exgId -> KrStkOrder"
-    _orders_orphan: dict[str, list[tuple[int, int]]]
-    "exgId -> list[tuple[exeqty, exeprc]]"
+    _orders_orphan: dict[str, list[tuple[int, int, str]]]
+    "exgId -> list[tuple[exeqty, exeprc, exgcode]]"
 
     _loop: asyncio.AbstractEventLoop
     _locId: int
@@ -195,19 +195,22 @@ class KisKrStkTradeRuntime:
         self._orders_pending: dict[str, KrStkOrder] = {}
         self._orders_active: dict[str, dict[str, KrStkOrder]] = {code: {} for code in codes} 
         # executed message received before order accepted message
-        self._orders_orphan: dict[str, list[tuple[int, int]]] = {} 
+        self._orders_orphan: dict[str, list[tuple[int, int, str]]] = {} 
 
         self._loop = asyncio.get_event_loop()
         self._locId = 0
 
         def handle_WsKrStkExecAlert(_: KisWsClient, msg: list[bytes]) -> None:
+            if msg[13] == b'1': # not executed message
+                return 
             exgId = msg[2].decode()
             odrside = 'S' if msg[4] == b'01' else 'B'
             code = msg[8].decode()
             exeqty = int(msg[9])
             exeprc = int(msg[10])
-            if self._handle_order_executed(code, odrside, exeqty, exeprc, exgId) is None:
-                on_order_executed(code, odrside, exeqty, exeprc, msg[19].decode())
+            exgcode = msg[19].decode()
+            if self._handle_order_executed(code, odrside, exeqty, exeprc, exgId, exgcode) is None:
+                on_order_executed(code, odrside, exeqty, exeprc, exgcode)
 
         ws_client._callbacks[WsKrStkExecAlert.TrId.encode()] = (WsKrStkExecAlert.TrLength, handle_WsKrStkExecAlert)
         ws_client.subscribe(WsKrStkExecAlert.TrId, hts_id)
@@ -244,8 +247,8 @@ class KisKrStkTradeRuntime:
             orphan_odrs = self._orders_orphan.pop(exgId, None)
             if orphan_odrs is None:
                 return
-            for exeqty, exeprc in orphan_odrs:
-                self._handle_order_executed(code, odrside, exeqty, exeprc, exgId)
+            for exeqty, exeprc, exgcode in orphan_odrs:
+                self._handle_order_executed(code, odrside, exeqty, exeprc, exgId, exgcode)
         else: # order rejected
             if odrside == 'B':
                 self.cash[0] += odrqty * odrprc
@@ -297,14 +300,15 @@ class KisKrStkTradeRuntime:
         exeqty: int,
         exeprc: int,
         exgId: str,
+        exgcode: str
     ) -> MaybeError:
         active_odr = self._orders_active.get(code, {}).get(exgId, None)
         if active_odr is None: # orphan execution, order accepted message is not received yet.
             orphan_odr = self._orders_orphan.get(exgId, None)
             if orphan_odr is None:
-                self._orders_orphan[exgId] = [(exeqty, exeprc)]
+                self._orders_orphan[exgId] = [(exeqty, exeprc, exgcode)]
             else:
-                orphan_odr.append((exeqty, exeprc))
+                orphan_odr.append((exeqty, exeprc, exgcode))
             return Exception('Orphan execution')
         
         if odrside == 'B':
