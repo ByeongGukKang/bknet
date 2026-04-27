@@ -1,4 +1,6 @@
+import atexit
 import multiprocessing as mp
+from queue import Full
 
 class LoggerWithBuffer:
 
@@ -24,24 +26,34 @@ class LoggerWithBuffer:
 
 class LoggerProcess:
 
-    def __init__(self, log_file_path: str, process_name: str = 'bknet_LoggerProcess'):
-        self.log_queue: mp.Queue[str] = mp.Queue()
-        self.logger_process = mp.Process(target=self._logger_process, name=process_name, args=(log_file_path,), daemon=True)
+    def __init__(self, log_file_path: str, process_name: str = 'bknet_LoggerProcess', maxsize: int = 1024):
+        self.log_queue: mp.Queue[str] = mp.Queue(maxsize=maxsize)
+        self.logger_process = mp.Process(
+            target=self._logger_process, 
+            name=process_name, 
+            args=(log_file_path,), 
+            daemon=True
+        )
         self.logger_process.start()
+        
+        atexit.register(self.close)
 
     def log(self, message: str):
-        self.log_queue.put(message)
+        try:
+            self.log_queue.put(message, block=False)
+        except Full:
+            print("Warning: Log queue is full. Log message dropped.")
 
     def close(self):
-        self.log_queue.put(None) # type: ignore
-        self.logger_process.join()
+        if self.logger_process.is_alive():
+            self.log_queue.put(None) # type: ignore
+            self.logger_process.join(timeout=5) 
 
     def _logger_process(self, log_file_path: str):
         with open(log_file_path, 'a') as log_file:
             while True:
                 msg = self.log_queue.get()
-                if msg is None: # signal to terminate the logger process
+                if msg is None: # signal to terminate
                     break
                 log_file.write(f'{msg}\n')
             log_file.flush()
-

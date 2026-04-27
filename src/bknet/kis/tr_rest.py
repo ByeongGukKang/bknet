@@ -454,7 +454,7 @@ class KisKrStkTradeRuntime:
 
         self._loop.create_task(
             self._async_order_cash(code, odrside, odrkind, odrqty, odrprc, exgcode),
-            eager_start = True # type: ignore
+            # eager_start = True # type: ignore
         )
         return None
 
@@ -482,7 +482,7 @@ class KisKrStkTradeRuntime:
             return ErrOrderNotFound(f'Order[{odrno}] not found')
         self._loop.create_task(
             self._async_order_cancel(odrno, code, odrqty, allqty, exgcode),
-            eager_start = True # type: ignore
+            # eager_start = True # type: ignore
         )
         return None
 
