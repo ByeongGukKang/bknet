@@ -174,7 +174,7 @@ class KisWsClient(WebsocketWrapper):
         http_client: KisHttpClient,
         on_connected: Callable[[Self], None],
         on_disconnected: Callable[[Self], None],
-        on_frame: dict[type[WebsocketTr], Callable[[Self, list[bytes]], None]],
+        on_frame: dict[type[WebsocketTr], Callable[[Self, list[bytes]], None]] = {},
         on_frame_default: Callable[[Self, list[bytes]], None] = lambda self, msg: None,
         url: str = 'ws://ops.koreainvestment.com:21000',
     ) -> 'KisWsClient':
@@ -197,6 +197,19 @@ class KisWsClient(WebsocketWrapper):
             instance._callbacks[tr.TrId.encode()] = (tr.TrLength, callback)
         instance._callback_default = on_frame_default
         return instance
+    
+    def set_on_frame(self, callbacks: dict[type[WebsocketTr], Callable[[Self, list[bytes]], None]]):
+        """Set the on_frame callbacks.
+
+        Args:
+            callbacks: Dictionary mapping WebsocketTr classes to their corresponding callback functions. The callback functions are called when a message with the corresponding tr_id is received. Signature of callback functions: (KisWsClient, list[bytes]) -> None
+        """
+        for tr, callback in callbacks.items():
+            if not issubclass(tr, WebsocketTr):
+                raise ValueError(f'on_frame keys must be of subclass of WebsocketTr, got {type(tr)}')
+            if not callable(callback):
+                raise ValueError(f'on_frame values must be of type Callable with signature (KisWsClient, list[bytes]) -> None, got {type(callback)}')
+            self._callbacks[tr.TrId.encode()] = (tr.TrLength, callback)
 
     def _on_frame_wrapper(self: 'KisWsClient', frame: WSFrame):
         """on_frame wrapper.
