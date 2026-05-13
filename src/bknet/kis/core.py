@@ -74,13 +74,11 @@ class KisHttpClient(HttpWrapper, ForceNew):
             instance._api_limit_queue.put_nowait(None)
 
         async def _refresh_api_limit():
-            sleep_time = 1.0 / api_limit
             try:
                 while True:
-                    await asyncio.sleep(sleep_time)
-                    if instance._api_limit_queue.full():
-                        continue
-                    instance._api_limit_queue.put_nowait(None)
+                    await asyncio.sleep(1.0)  # 1초마다 깔끔하게 리프레시
+                    while not instance._api_limit_queue.full():
+                        instance._api_limit_queue.put_nowait(None)
             except asyncio.CancelledError:
                 pass
 
@@ -103,11 +101,29 @@ class KisHttpClient(HttpWrapper, ForceNew):
         params: Optional[str] = None,
         body: Optional[bytes] = None,
         headers: Optional[Dict[str, bytes]] = None,
+        timeout: float = 1.0,
     ) -> Response:
-        """Make an authenticated request to the KIS open API, respecting the API rate limit."""
-        await (
-            self._api_limit_queue.get()
-        )  # Wait for an available API slot based on the rate limit
+        """Make an authenticated request to the KIS open API, respecting the API rate limit.
+
+        Args:
+            method: HTTP method for the request (e.g., GET, POST).
+            params: URL parameters to append to the base URL. Optional.
+            body: Request body as bytes. Optional.
+            headers: Additional headers to include in the request. Optional.
+            timeout: Maximum time to wait for an available API slot based on the rate limit. If the timeout is reached, a RuntimeError is raised. Default is 1.0.
+
+        Returns:
+            Response object from the HTTP request.
+
+        Raises:
+            RuntimeError: If the API rate limit is exceeded and the timeout is reached.
+        """
+        try:
+            await asyncio.wait_for(
+                self._api_limit_queue.get(), timeout=timeout
+            )  # Wait for an available API slot based on the rate limit
+        except (asyncio.TimeoutError, TimeoutError):
+            raise RuntimeError("API rate limit exceeded. Please try again later.")
         return await self.client.request(
             method,
             f"{self.url}{params}" if (params is not None) else self.url,

@@ -1,6 +1,7 @@
 import asyncio
 from dataclasses import dataclass
 from enum import StrEnum
+from this import s
 from typing import Callable, Iterable, Literal, TypeAlias, Union
 
 from gufo.http import RequestMethod, Response
@@ -175,6 +176,7 @@ class KisKrStkTradeRuntime:
     "on_order_executed(KisKrStkTradeRuntime, code, odrside, exeqty, exeprc, exgcode)"
     on_error: Callable[["KisKrStkTradeRuntime", Exception], None]
     "on_error(KisKrStkTradeRuntime, Exception)"
+    timeout: float = 1.0
 
     cash: list[int]
     "[pending_cash, active_cash]"
@@ -208,19 +210,21 @@ class KisKrStkTradeRuntime:
             ["KisKrStkTradeRuntime", str, Literal["B", "S"], int, int, str], None
         ],
         on_error: Callable[["KisKrStkTradeRuntime", Exception], None],
+        timeout: float = 1.0,
     ):
         """KIS 국내주식 실시간 주문/체결 관리
 
         Args:
-            cano: 계좌번호
-            acnt_prdt_cd: 상품유형코드
-            hts_id: HTS 아이디
-            http_client: KisHttpClient 인스턴스
-            ws_client: KisWsClient 인스턴스
-            on_order_cash: 현금 주문 결과 콜백, on_order_cash(self, json)
-            on_order_cancel: 주문 취소 결과 콜백, on_order_cancel(self, json)
-            on_order_executed: 주문 체결 결과 콜백, on_order_executed(self, code, odrside, exeqty, exeprc, exgcode)
-            on_error: 에러 콜백, on_error(self, Exception)
+            cano (str): 계좌번호
+            acnt_prdt_cd (str): 상품유형코드
+            hts_id (str): HTS 아이디
+            http_client (KisHttpClient): KisHttpClient 인스턴스
+            ws_client (KisWsClient): KisWsClient 인스턴스
+            on_order_cash (Callable[[KisKrStkTradeRuntime, dict], None]): 현금 주문 결과 콜백, on_order_cash(self, json)
+            on_order_cancel (Callable[[KisKrStkTradeRuntime, dict], None]): 주문 취소 결과 콜백, on_order_cancel(self, json)
+            on_order_executed (Callable[[KisKrStkTradeRuntime, str, Literal["B", "S"], int, int, str], None]): 주문 체결 결과 콜백, on_order_executed(self, code, odrside, exeqty, exeprc, exgcode)
+            on_error (Callable[[KisKrStkTradeRuntime, Exception], None]): 에러 콜백, on_error(self, Exception)
+            timeout (float): HTTP 요청 타임아웃, default 1.0
 
         Note:
         - ws_clinet에 자동으로 WsKrStkExecAlert 등록, 체결 메시지 수신 시 on_order_executed 호출.
@@ -233,6 +237,7 @@ class KisKrStkTradeRuntime:
         self.on_order_cancel = on_order_cancel
         self.on_order_executed = on_order_executed
         self.on_error = on_error
+        self.timeout = timeout
 
         self.cash = [0, 0]
         self.posits = {}
@@ -393,6 +398,7 @@ class KisKrStkTradeRuntime:
                 params="/uapi/domestic-stock/v1/trading/order-cash",
                 body=f'{{"CANO":"{self.cano}","ACNT_PRDT_CD":"{self.acnt_prdt_cd}","PDNO":"{code}","ORD_DVSN":"{odrkind}","ORD_QTY":"{odrqty}","ORD_UNPR":"{odrprc}","EXCG_ID_DVSN_CD":"{exgcode}"}}'.encode(),
                 headers=self._headers_buy if odrside == "B" else self._headers_sell,
+                timeout=self.timeout,
             )
             # update order status
             pending_odr = self.orders_pending.pop(locId, None)
@@ -451,6 +457,7 @@ class KisKrStkTradeRuntime:
                 params="/uapi/domestic-stock/v1/trading/order-rvsecncl",
                 body=f'{{"CANO":"{self.cano}","ACNT_PRDT_CD":"{self.acnt_prdt_cd}","ORGN_ODNO":"{odrno}","ORD_DVSN":"02","RVSE_CNCL_DVSN_CD":"{allqty}","ORD_QTY":"{odrqty}","ORD_UNPR":"0","QTY_ALL_ORD_YN":"{allqty}","EXCG_ID_DVSN_CD":"{exgcode}"}}'.encode(),
                 headers=self._headers_cancel,
+                timeout=self.timeout,
             )
 
             self.orders_pending.pop(locId, None)
