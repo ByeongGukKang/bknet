@@ -155,7 +155,7 @@ class KrStkOrder:
     exgId: str
     code: str
     side: Literal["B", "S", "A", "C"]  # 'B','S','A','C' (Buy, Sell, Adjust, Cancel)
-    kind: KrOrderKind
+    kind: Union[str, KrOrderKind]
     qty: int
     prc: int
 
@@ -230,8 +230,8 @@ class KisKrStkTradeRuntime:
         self.on_order_executed = on_order_executed
         self.on_error = on_error
 
-        self.cash: list[int] = [0, 0]
-        self.posits: dict[str, list[int]] = {}
+        self.cash = [0, 0]
+        self.posits = {}
 
         self._headers = {
             "content-type": b"application/json",
@@ -241,10 +241,10 @@ class KisKrStkTradeRuntime:
             "custtype": http_client.custtype.encode(),
         }
 
-        self._orders_pending: dict[str, KrStkOrder] = {}
-        self._orders_active: dict[str, dict[str, KrStkOrder]] = {}
+        self._orders_pending = {}
+        self._orders_active = {}
         # executed message received before order accepted message
-        self._orders_orphan: dict[str, list[tuple[int, int, str]]] = {}
+        self._orders_orphan = {}
 
         self._loop = asyncio.get_event_loop()
         self._locId = 0
@@ -297,27 +297,48 @@ class KisKrStkTradeRuntime:
         """code 종목의 활성 매수 주문들을 반환합니다.
 
         Args:
-            code: 종목 코드, 예) '252670'
+            code: 종목 코드, 예) '005930'
 
         Note:
             - 활성 주문: 접수되어 체결을 기다리는 주문
             - generator를 반환합니다. list가 필요한 경우 list()로 감싸서 사용하세요.
         """
-        bids = self._orders_active.get(code, {})
-        return (odr for odr in bids.values() if odr.side == "B")
+        return (
+            odr for odr in self._orders_active.get(code, {}).values() if odr.side == "B"
+        )
 
     def get_active_asks(self, code: str) -> Iterable[KrStkOrder]:
         """code 종목의 활성 매도 주문들을 반환합니다.
 
         Args:
-            code: 종목 코드, 예) '252670'
+            code: 종목 코드, 예) '005930'
 
         Note:
             - 활성 주문: 접수되어 체결을 기다리는 주문
             - generator를 반환합니다. list가 필요한 경우 list()로 감싸서 사용하세요.
         """
-        asks = self._orders_active.get(code, {})
-        return (odr for odr in asks.values() if odr.side == "S")
+        return (
+            odr for odr in self._orders_active.get(code, {}).values() if odr.side == "S"
+        )
+
+    def get_pending_orders(
+        self, code: str, side: Literal["B", "S", "A", "C"]
+    ) -> Iterable[KrStkOrder]:
+        """code 종목의 side 방향의 모든 예약 주문들을 반환합니다.
+
+        Args:
+            code: 종목 코드, 예) '005930'
+            side: 주문 방향 ['B', 'S', 'A', 'C'] (Buy, Sell, Adjust, Cancel)
+
+        Note:
+            - 예약 주문: 아직 체결되지 않은 주문 (접수 대기 중이거나 접수되어 체결을 기다리는 주문)
+            - generator를 반환합니다. list가 필요한 경우 list()로 감싸서 사용하세요.
+        """
+        return (
+            odr
+            for odr in self._orders_pending.values()
+            if odr.code == code and odr.side == side
+        )
 
     async def _async_order_cash(
         self,
@@ -381,7 +402,7 @@ class KisKrStkTradeRuntime:
         exgcode: str = "KRX",
     ) -> None:
         locId = self.get_locId()
-        self._orders_pending[locId] = KrStkOrder(locId, "", code, "C", "00", 0, 0)  # type: ignore
+        self._orders_pending[locId] = KrStkOrder(locId, "", code, "C", "00", 0, 0)
         req_headers = self._headers.copy()
         req_headers["tr_id"] = b"TTTC0013U"
         resp = await self.http_client.request(
@@ -537,10 +558,10 @@ class RestKrStock:
             mrkt_div_code: 시장구분코드 {'J': KRX, 'NX': NXT, 'UN': 통합}
             code: 종목 코드 (e.g. 005930, ETN은 6자리 앞에 Q입력 필수)
         """
-        req_headers: dict[str, bytes] = http_client.client.headers.copy()
+        req_headers: dict[str, bytes] = http_client.client.headers.copy()  # type: ignore
         req_headers["tr_id"] = b"FHKST01010100"
         return await http_client.request(
-            RequestMethod.GET,
+            RequestMethod.GET,  # type: ignore
             params=f"/uapi/domestic-stock/v1/quotations/inquire-price?FID_COND_MRKT_DIV_CODE={mrkt_div_code}&FID_INPUT_ISCD={code}",
             headers=req_headers,
         )
@@ -568,10 +589,10 @@ class RestKrStock:
             period_div_code: 기간구분코드 {'D': 일봉, 'W': 주봉, 'M': 월봉, 'Y': 년봉}
             adj_prc: 수정주가 여부 (True: 수정주가, False: 원주가), default True
         """
-        req_headers: dict[str, bytes] = http_client.client.headers.copy()
+        req_headers: dict[str, bytes] = http_client.client.headers.copy()  # type: ignore
         req_headers["tr_id"] = b"FHKST03010100"
         return await http_client.request(
-            RequestMethod.GET,
+            RequestMethod.GET,  # type: ignore
             params=f"/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice?FID_COND_MRKT_DIV_CODE={mrkt_div_code}&FID_INPUT_ISCD={code}&FID_INPUT_DATE_1={sdate}&FID_INPUT_DATE_2={edate}&FID_PERIOD_DIV_CODE={period_div_code}&FID_ORG_ADJ_PRC={'0' if adj_prc else '1'}",
             headers=req_headers,
         )
@@ -595,10 +616,10 @@ class RestKrStock:
             sdate: 조회 시작 일자 (YYYYMMDD)
             edate: 조회 종료 일자 (YYYYMMDD), 최대 100개
         """
-        req_headers: dict[str, bytes] = http_client.client.headers.copy()
+        req_headers: dict[str, bytes] = http_client.client.headers.copy()  # type: ignore
         req_headers["tr_id"] = b"FHPST02440200"
         return await http_client.request(
-            RequestMethod.GET,
+            RequestMethod.GET,  # type: ignore
             params=f"/uapi/etfetn/v1/quotations/nav-comparison-daily-trend?FID_COND_MRKT_DIV_CODE={mrkt_div_code}&FID_INPUT_ISCD={code}&FID_INPUT_DATE_1={sdate}&FID_INPUT_DATE_2={edate}",
             headers=req_headers,
         )
@@ -644,10 +665,10 @@ class RestKrDerivatives:
             edate: 조회 종료 일자 (YYYYMMDD)
             period_div_code: 기간구분코드 {'D': 일간, 'W': 주간, 'M': 월간}
         """
-        req_headers: dict[str, bytes] = http_client.client.headers.copy()
+        req_headers: dict[str, bytes] = http_client.client.headers.copy()  # type: ignore
         req_headers["tr_id"] = b"FHKIF03020100"
         return await http_client.request(
-            RequestMethod.GET,
+            RequestMethod.GET,  # type: ignore
             params=f"/uapi/domestic-futureoption/v1/quotations/inquire-daily-fuopchartprice?FID_COND_MRKT_DIV_CODE={mrkt_div_code}&FID_INPUT_ISCD={code}&FID_INPUT_DATE_1={sdate}&FID_INPUT_DATE_2={edate}&FID_PERIOD_DIV_CODE={period_div_code}",
             headers=req_headers,
         )

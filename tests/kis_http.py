@@ -7,7 +7,7 @@ async def main():
 
     httpClient = await KisHttpClient.New(appkey="appkey", appsecret="appsecret")
 
-    resp = await RestKrDerivatives.kr_futures_board(httpClient, "")
+    resp = await RestKrDerivatives.fut_board(httpClient, "")
     print(resp.content)
 
 
