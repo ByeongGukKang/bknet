@@ -4,6 +4,7 @@ from enum import StrEnum
 from typing import Callable, Iterable, Literal, TypeAlias, Union
 
 from gufo.http import RequestMethod, Response
+from numpy import acos
 from orjson import loads as orjson_loads
 
 from bknet.kis.core import KisHttpClient, KisWsClient
@@ -46,7 +47,7 @@ class OrderKindKRX(KrOrderKind):
     MidPrice = "21"
     "['21'] 중간가"
     StopLimit = "22"
-    "['22'] 스톱지정가 - 현재 bknet에서 지원 X"
+    "['22'] 스톱지정가 - 지원 X"
     MidIOC = "23"
     "['23'] 중간가IOC"
     MidFOK = "24"
@@ -142,10 +143,10 @@ class ErrOrderNotFound(TradeError):
     pass
 
 
-MaybeError: TypeAlias = Union[None, TradeError]  # Error returnable type
+MaybeError: TypeAlias = Union[None, Exception]  # Error returnable type
 """MaybeError는 KrStkTradeRuntime의 메서드에서 발생할 수 있는 에러를 나타내는 타입 별칭입니다.
 - None: 에러가 발생하지 않은 경우
-- TradeError: 에러가 발생한 경우, TradeError 또는 그 하위 클래스의 인스턴스가 반환됩니다.
+- Exception: 에러가 발생한 경우, Exception 또는 그 하위 클래스(TradeError)의 인스턴스가 반환됩니다.
 """
 
 
@@ -172,22 +173,25 @@ class KisKrStkTradeRuntime:
         ["KisKrStkTradeRuntime", str, Literal["B", "S"], int, int, str], None
     ]
     "on_order_executed(KisKrStkTradeRuntime, code, odrside, exeqty, exeprc, exgcode)"
-    on_error: Callable[["KisKrStkTradeRuntime", TradeError], None]
-    "on_error(KisKrStkTradeRuntime, TradeError)"
+    on_error: Callable[["KisKrStkTradeRuntime", Exception], None]
+    "on_error(KisKrStkTradeRuntime, Exception)"
 
     cash: list[int]
     "[pending_cash, active_cash]"
     posits: dict[str, list[int]]
     "code -> [pending_qty, active_qty]"
 
-    _headers: dict[str, bytes]
-    _orders_pending: dict[str, KrStkOrder]
+    _headers_buy: dict[str, bytes]
+    _headers_sell: dict[str, bytes]
+    _headers_cancel: dict[str, bytes]
+    orders_pending: dict[str, KrStkOrder]
     "locId -> KrStkOrder"
-    _orders_active: dict[str, dict[str, KrStkOrder]]
+    orders_active: dict[str, dict[str, KrStkOrder]]
     "code -> exgId -> KrStkOrder"
-    _orders_orphan: dict[str, list[tuple[int, int, str]]]
+    orders_orphan: dict[str, list[tuple[int, int, str]]]
     "exgId -> list[tuple[exeqty, exeprc, exgcode]]"
 
+    _background_tasks: set[asyncio.Task]
     _loop: asyncio.AbstractEventLoop
     _locId: int
 
@@ -203,7 +207,7 @@ class KisKrStkTradeRuntime:
         on_order_executed: Callable[
             ["KisKrStkTradeRuntime", str, Literal["B", "S"], int, int, str], None
         ],
-        on_error: Callable[["KisKrStkTradeRuntime", TradeError], None],
+        on_error: Callable[["KisKrStkTradeRuntime", Exception], None],
     ):
         """KIS 국내주식 실시간 주문/체결 관리
 
@@ -216,7 +220,7 @@ class KisKrStkTradeRuntime:
             on_order_cash: 현금 주문 결과 콜백, on_order_cash(self, json)
             on_order_cancel: 주문 취소 결과 콜백, on_order_cancel(self, json)
             on_order_executed: 주문 체결 결과 콜백, on_order_executed(self, code, odrside, exeqty, exeprc, exgcode)
-            on_error: 에러 콜백, on_error(self, TradeError)
+            on_error: 에러 콜백, on_error(self, Exception)
 
         Note:
         - ws_clinet에 자동으로 WsKrStkExecAlert 등록, 체결 메시지 수신 시 on_order_executed 호출.
@@ -233,7 +237,7 @@ class KisKrStkTradeRuntime:
         self.cash = [0, 0]
         self.posits = {}
 
-        self._headers = {
+        base_headers = {
             "content-type": b"application/json",
             "authorization": http_client.client.headers["authorization"],  # type: ignore
             "appkey": http_client.client.headers["appkey"],  # type: ignore
@@ -241,11 +245,20 @@ class KisKrStkTradeRuntime:
             "custtype": http_client.custtype.encode(),
         }
 
-        self._orders_pending = {}
-        self._orders_active = {}
-        # executed message received before order accepted message
-        self._orders_orphan = {}
+        # header types per order type, tr_id is different for buy/sell/cancel, illiminate header copying
+        self._headers_buy = base_headers.copy()
+        self._headers_buy["tr_id"] = b"TTTC0012U"  # 매수
+        self._headers_sell = base_headers.copy()
+        self._headers_sell["tr_id"] = b"TTTC0011U"  # 매도
+        self._headers_cancel = base_headers.copy()
+        self._headers_cancel["tr_id"] = b"TTTC0013U"  # 취소
 
+        self.orders_pending = {}
+        self.orders_active = {}
+        # executed message received before order accepted message
+        self.orders_orphan = {}
+
+        self._background_tasks = set()
         self._loop = asyncio.get_event_loop()
         self._locId = 0
 
@@ -301,11 +314,12 @@ class KisKrStkTradeRuntime:
 
         Note:
             - 활성 주문: 접수되어 체결을 기다리는 주문
-            - generator를 반환합니다. list가 필요한 경우 list()로 감싸서 사용하세요.
+            - 값이 없는 경우 빈 tuple, 있는 경우 generator를 반환합니다. list가 필요한 경우 list()로 감싸서 사용하세요.
         """
-        return (
-            odr for odr in self._orders_active.get(code, {}).values() if odr.side == "B"
-        )
+        active_orders = self.orders_active.get(code, {})
+        if not active_orders:
+            return ()
+        return (odr for odr in active_orders.values() if odr.side == "B")
 
     def get_active_asks(self, code: str) -> Iterable[KrStkOrder]:
         """code 종목의 활성 매도 주문들을 반환합니다.
@@ -315,11 +329,12 @@ class KisKrStkTradeRuntime:
 
         Note:
             - 활성 주문: 접수되어 체결을 기다리는 주문
-            - generator를 반환합니다. list가 필요한 경우 list()로 감싸서 사용하세요.
+            - 값이 없는 경우 빈 tuple, 있는 경우 generator를 반환합니다. list가 필요한 경우 list()로 감싸서 사용하세요.
         """
-        return (
-            odr for odr in self._orders_active.get(code, {}).values() if odr.side == "S"
-        )
+        active_orders = self.orders_active.get(code, {})
+        if not active_orders:
+            return ()
+        return (odr for odr in active_orders.values() if odr.side == "S")
 
     def get_pending_orders(
         self, code: str, side: Literal["B", "S", "A", "C"]
@@ -332,11 +347,30 @@ class KisKrStkTradeRuntime:
 
         Note:
             - 예약 주문: 아직 체결되지 않은 주문 (접수 대기 중이거나 접수되어 체결을 기다리는 주문)
-            - generator를 반환합니다. list가 필요한 경우 list()로 감싸서 사용하세요.
+            - 값이 없는 경우 빈 tuple, 있는 경우 generator를 반환합니다. list가 필요한 경우 list()로 감싸서 사용하세요.
         """
+        if not self.orders_pending:
+            return ()
         return (
             odr
-            for odr in self._orders_pending.values()
+            for odr in self.orders_pending.values()
+            if odr.code == code and odr.side == side
+        )
+
+    def get_pending_orders_any(
+        self, code: str, side: Literal["B", "S", "A", "C"]
+    ) -> bool:
+        """code 종목의 side 방향의 예약 주문의 존재 여부를 반환합니다.
+
+        Args:
+            code: 종목 코드, 예) '005930'
+            side: 주문 방향 ['B', 'S', 'A', 'C'] (Buy, Sell, Adjust, Cancel)
+        """
+        if not self.orders_pending:
+            return False
+        return any(
+            odr
+            for odr in self.orders_pending.values()
             if odr.code == code and odr.side == side
         )
 
@@ -350,48 +384,56 @@ class KisKrStkTradeRuntime:
         exgcode: str = "KRX",
     ) -> None:
         locId = self.get_locId()
-        self._orders_pending[locId] = KrStkOrder(
+        self.orders_pending[locId] = KrStkOrder(
             locId, "", code, odrside, odrkind, odrqty, odrprc
-        )  # type: ignore
-        req_headers = self._headers.copy()
-        req_headers["tr_id"] = b"TTTC0011U" if odrside == "S" else b"TTTC0012U"
-        resp = await self.http_client.request(
-            method=RequestMethod.POST,  # type: ignore
-            params="/uapi/domestic-stock/v1/trading/order-cash",
-            body=f'{{"CANO":"{self.cano}","ACNT_PRDT_CD":"{self.acnt_prdt_cd}","PDNO":"{code}","ORD_DVSN":"{odrkind}","ORD_QTY":"{odrqty}","ORD_UNPR":"{odrprc}","EXCG_ID_DVSN_CD":"{exgcode}"}}'.encode(),
-            headers=req_headers,
         )
-
-        # update order status
-        pending_odr = self._orders_pending.pop(locId, None)
-        if pending_odr is None:
-            return
-        resp_json: dict = orjson_loads(resp.content)
-        rt_cd = resp_json.get("rt_cd", "")
-        if rt_cd == "0":  # B/S order accepted
-            exgId = resp_json["output"]["ODNO"]
-            pending_odr.exgId = exgId
-
-            self._orders_active.setdefault(code, {})[exgId] = pending_odr
-            orphan_odrs = self._orders_orphan.pop(exgId, None)
-            if orphan_odrs is None:
+        try:
+            resp = await self.http_client.request(
+                method=RequestMethod.POST,  # type: ignore
+                params="/uapi/domestic-stock/v1/trading/order-cash",
+                body=f'{{"CANO":"{self.cano}","ACNT_PRDT_CD":"{self.acnt_prdt_cd}","PDNO":"{code}","ORD_DVSN":"{odrkind}","ORD_QTY":"{odrqty}","ORD_UNPR":"{odrprc}","EXCG_ID_DVSN_CD":"{exgcode}"}}'.encode(),
+                headers=self._headers_buy if odrside == "B" else self._headers_sell,
+            )
+            # update order status
+            pending_odr = self.orders_pending.pop(locId, None)
+            if pending_odr is None:
                 return
-            for exeqty, exeprc, exgcode in orphan_odrs:
-                err = self._handle_order_executed(
-                    code, odrside, exeqty, exeprc, exgId, exgcode
-                )
-                if err is None:
-                    self.on_order_executed(self, code, odrside, exeqty, exeprc, exgcode)
+            resp_json: dict = orjson_loads(resp.content)
+            rt_cd = resp_json.get("rt_cd", "")
+            if rt_cd == "0":  # B/S order accepted
+                exgId = resp_json["output"]["ODNO"]
+                pending_odr.exgId = exgId
+
+                self.orders_active.setdefault(code, {})[exgId] = pending_odr
+                orphan_odrs = self.orders_orphan.pop(exgId, None)
+                if orphan_odrs is None:
+                    return
+                for exeqty, exeprc, exgcode in orphan_odrs:
+                    err = self._handle_order_executed(
+                        code, odrside, exeqty, exeprc, exgId, exgcode
+                    )
+                    if err is None:
+                        self.on_order_executed(
+                            self, code, odrside, exeqty, exeprc, exgcode
+                        )
+                    else:
+                        self.on_error(self, err)
+            else:  # order rejected
+                if odrside == "B":
+                    self.cash[0] += odrqty * odrprc
+                    self.posits[code][0] -= odrqty
                 else:
-                    self.on_error(self, err)
-        else:  # order rejected
+                    self.posits[code][0] += odrqty
+
+            self.on_order_cash(self, resp_json)
+        except Exception as e:
+            self.orders_pending.pop(locId, None)
             if odrside == "B":
                 self.cash[0] += odrqty * odrprc
                 self.posits[code][0] -= odrqty
             else:
                 self.posits[code][0] += odrqty
-
-        self.on_order_cash(self, resp_json)
+            self.on_error(self, e)
 
     async def _async_order_cancel(
         self,
@@ -402,32 +444,36 @@ class KisKrStkTradeRuntime:
         exgcode: str = "KRX",
     ) -> None:
         locId = self.get_locId()
-        self._orders_pending[locId] = KrStkOrder(locId, "", code, "C", "00", 0, 0)
-        req_headers = self._headers.copy()
-        req_headers["tr_id"] = b"TTTC0013U"
-        resp = await self.http_client.request(
-            method=RequestMethod.POST,  # type: ignore
-            params="/uapi/domestic-stock/v1/trading/order-rvsecncl",
-            body=f'{{"CANO":"{self.cano}","ACNT_PRDT_CD":"{self.acnt_prdt_cd}","ORGN_ODNO":"{odrno}","ORD_DVSN":"02","RVSE_CNCL_DVSN_CD":"{allqty}","ORD_QTY":"{odrqty}","ORD_UNPR":"0","QTY_ALL_ORD_YN":"{allqty}","EXCG_ID_DVSN_CD":"{exgcode}"}}'.encode(),
-            headers=req_headers,
-        )
+        self.orders_pending[locId] = KrStkOrder(locId, "", code, "C", "00", 0, 0)
+        try:
+            resp = await self.http_client.request(
+                method=RequestMethod.POST,  # type: ignore
+                params="/uapi/domestic-stock/v1/trading/order-rvsecncl",
+                body=f'{{"CANO":"{self.cano}","ACNT_PRDT_CD":"{self.acnt_prdt_cd}","ORGN_ODNO":"{odrno}","ORD_DVSN":"02","RVSE_CNCL_DVSN_CD":"{allqty}","ORD_QTY":"{odrqty}","ORD_UNPR":"0","QTY_ALL_ORD_YN":"{allqty}","EXCG_ID_DVSN_CD":"{exgcode}"}}'.encode(),
+                headers=self._headers_cancel,
+            )
 
-        self._orders_pending.pop(locId, None)
-        resp_json: dict = orjson_loads(resp.content)
-        rt_cd = resp_json.get("rt_cd", "")
-        if rt_cd == "0":  # B/S order accepted
-            active_odr = self._orders_active.setdefault(code, {}).pop(odrno, None)
-            if active_odr is None:  # active_odr is None when order is already executed.
-                return
-            if active_odr.side == "B":
-                self.cash[0] += active_odr.qty * active_odr.prc
-                self.posits[code][0] -= active_odr.qty
-            else:
-                self.posits[code][0] += active_odr.qty
-        else:  # order rejected
-            pass
+            self.orders_pending.pop(locId, None)
+            resp_json: dict = orjson_loads(resp.content)
+            rt_cd = resp_json.get("rt_cd", "")
+            if rt_cd == "0":  # B/S order accepted
+                active_odr = self.orders_active.setdefault(code, {}).pop(odrno, None)
+                if (
+                    active_odr is None
+                ):  # active_odr is None when order is already executed.
+                    return
+                if active_odr.side == "B":
+                    self.cash[0] += active_odr.qty * active_odr.prc
+                    self.posits[code][0] -= active_odr.qty
+                else:
+                    self.posits[code][0] += active_odr.qty
+            else:  # order rejected
+                pass
 
-        self.on_order_cancel(self, resp_json)
+            self.on_order_cancel(self, resp_json)
+        except Exception as e:
+            self.orders_pending.pop(locId, None)
+            self.on_error(self, e)
 
     def _handle_order_executed(
         self,
@@ -438,13 +484,13 @@ class KisKrStkTradeRuntime:
         exgId: str,
         exgcode: str,
     ) -> MaybeError:
-        active_odr = self._orders_active.setdefault(code, {}).get(exgId, None)
+        active_odr = self.orders_active.setdefault(code, {}).get(exgId, None)
         if (
             active_odr is None
         ):  # orphan execution, order accepted message is not received yet.
-            orphan_odr = self._orders_orphan.get(exgId, None)
+            orphan_odr = self.orders_orphan.get(exgId, None)
             if orphan_odr is None:
-                self._orders_orphan[exgId] = [(exeqty, exeprc, exgcode)]
+                self.orders_orphan[exgId] = [(exeqty, exeprc, exgcode)]
             else:
                 orphan_odr.append((exeqty, exeprc, exgcode))
             return OrphanExecutionError(f"Orphan execution received for exgId {exgId}")
@@ -462,7 +508,7 @@ class KisKrStkTradeRuntime:
             self.cash[1] += exeqty * exeprc
         active_odr.qty -= exeqty
         if active_odr.qty == 0:
-            del self._orders_active[code][exgId]
+            del self.orders_active[code][exgId]
 
         return None
 
@@ -509,10 +555,12 @@ class KisKrStkTradeRuntime:
         self.cash[0] = pending_cash
         self.posits[code][0] = pending_pos
 
-        self._loop.create_task(
+        task = self._loop.create_task(
             self._async_order_cash(code, odrside, odrkind, odrqty, odrprc, exgcode),
             # eager_start = True # type: ignore
         )
+        task.add_done_callback(self._background_tasks.discard)
+        self._background_tasks.add(task)
         return None
 
     def order_cancel(
@@ -534,13 +582,15 @@ class KisKrStkTradeRuntime:
             allqty: 전량 주문 여부 ['Y', 'N'], default 'Y'
             exgcode: 거래소 ['KRX', 'NXT', 'SOR'], default 'KRX'
         """
-        oodr = self._orders_active.setdefault(code, {}).get(odrno, None)
+        oodr = self.orders_active.setdefault(code, {}).get(odrno, None)
         if oodr is None:
             return ErrOrderNotFound(f"Order[{odrno}] not found")
-        self._loop.create_task(
+        task = self._loop.create_task(
             self._async_order_cancel(odrno, code, odrqty, allqty, exgcode),
             # eager_start = True
         )
+        task.add_done_callback(self._background_tasks.discard)
+        self._background_tasks.add(task)
         return None
 
 
@@ -573,7 +623,7 @@ class RestKrStock:
         code: str,
         sdate: str,
         edate: str,
-        period_div_code: Literal["D", "W", "M", Y],
+        period_div_code: Literal["D", "W", "M", "Y"],
         adj_prc: bool = True,
     ) -> Response:
         """[국내주식-기본시세] 주식기간별시세
@@ -636,10 +686,10 @@ class RestKrDerivatives:
             http_client: KisHttpClient 인스턴스
             mrkt_cls_code: 시장구분코드 {'': KOSPI200, 'MKI': 미니KOSPI200, 'WKM': KOSPI200위클리(월), 'WKI': KOSPI200위클리(목), 'KQI': KOSDAQ150}
         """
-        req_headers: dict[str, bytes] = http_client.client.headers.copy()
+        req_headers: dict[str, bytes] = http_client.client.headers.copy()  # type: ignore
         req_headers["tr_id"] = b"FHPIF05030200"
         return await http_client.request(
-            RequestMethod.GET,
+            RequestMethod.GET,  # type: ignore
             params=f"/uapi/domestic-futureoption/v1/quotations/display-board-futures?FID_COND_MRKT_DIV_CODE=F&FID_COND_SCR_DIV_CODE=20503&FID_COND_MRKT_CLS_CODE={mrkt_cls_code}",
             headers=req_headers,
         )
