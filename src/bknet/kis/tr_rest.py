@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Callable, Iterable, Literal, TypeAlias, Union
 
+import curl_cffi
 from gufo.http import RequestMethod, Response
 from orjson import loads as orjson_loads
 
@@ -176,7 +177,7 @@ class KisKrStkTradeRuntime:
     "on_error(KisKrStkTradeRuntime, Exception)"
     timeout: float = 1.0
 
-    cash: list[int]
+    cash: list[float]
     "[pending_cash, active_cash]"
     posits: dict[str, list[int]]
     "code -> [pending_qty, active_qty]"
@@ -237,7 +238,7 @@ class KisKrStkTradeRuntime:
         self.on_error = on_error
         self.timeout = timeout
 
-        self.cash = [0, 0]
+        self.cash = [0.0, 0.0]
         self.posits = {}
 
         base_headers = {
@@ -250,20 +251,28 @@ class KisKrStkTradeRuntime:
 
         # header types per order type, tr_id is different for buy/sell/cancel, illiminate header copying
         self._headers_buy = base_headers.copy()
-        self._headers_buy["tr_id"] = b"TTTC0012U"  # 매수
+        self._headers_buy["tr_id"] = b"TTTC0012U"  # Buy
         self._headers_sell = base_headers.copy()
-        self._headers_sell["tr_id"] = b"TTTC0011U"  # 매도
+        self._headers_sell["tr_id"] = b"TTTC0011U"  # Sell
         self._headers_cancel = base_headers.copy()
-        self._headers_cancel["tr_id"] = b"TTTC0013U"  # 취소
+        self._headers_cancel["tr_id"] = b"TTTC0013U"  # Adjust & Cancel
 
         self.orders_pending = {}
         self.orders_active = {}
         # executed message received before order accepted message
         self.orders_orphan = {}
+        """exgId -> list[tuple[exeqty, exeprc, exgcode]]"""
 
         self._background_tasks = set()
         self._loop = asyncio.get_event_loop()
         self._locId = 0
+
+        task_update_cash = self._loop.create_task(self.update_cash())
+        task_update_cash.add_done_callback(self._background_tasks.discard)
+        self._background_tasks.add(task_update_cash)
+        task_update_posit = self._loop.create_task(self.update_posits())
+        task_update_posit.add_done_callback(self._background_tasks.discard)
+        self._background_tasks.add(task_update_posit)
 
         def handle_WsKrStkExecAlert(_: KisWsClient, msg: list[bytes]) -> None:
             if msg[13] == b"1":  # not executed message
@@ -288,6 +297,56 @@ class KisKrStkTradeRuntime:
         )
         ws_client.subscribe(WsKrStkExecAlert.TrId, hts_id)
 
+    async def update_cash(self):
+        """현재 현금 잔고를 조회하여 self.cash를 업데이트합니다."""
+        req_header = self.http_client.client.headers.copy()  # type: ignore
+        req_header["tr_id"] = b"TTTC0869R"
+        try:
+            resp = await self.http_client.request(
+                method=RequestMethod.GET,  # type: ignore
+                params=f"/uapi/domestic-stock/v1/trading/intgr-margin?CANO={self.cano}&ACNT_PRDT_CD={self.acnt_prdt_cd}&CMA_EVLU_AMT_ICLD_YN=N&WCRC_FRCR_DVSN_CD=02&FWEX_CTRT_FRCR_DVSN_CD=02",
+                headers=req_header,
+                timeout=self.timeout,
+            )
+            resp_json = orjson_loads(resp.content)
+            if resp_json.get("rt_cd", "") != "0":
+                raise Exception(resp_json)
+            self.cash[1] = float(resp_json["output"]["stck_cash_ord_psbl_amt"])
+        except Exception as e:
+            self.on_error(self, e)
+
+    async def update_posits(self):
+        """현재 잔고를 조회하여 self.posits를 업데이트합니다."""
+        req_header = self.http_client.client.headers.copy()  # type: ignore
+        req_header["tr_id"] = b"TTTC8434R"
+        try:
+            ctx_area_fk100 = ""
+            ctx_area_nk100 = ""
+            while True:
+                resp = await self.http_client.request(
+                    method=RequestMethod.GET,  # type: ignore
+                    params=f"/uapi/domestic-stock/v1/trading/inquire-balance?CANO={self.cano}&ACNT_PRDT_CD={self.acnt_prdt_cd}&AFHR_FLPR_YN=N&INQR_DVSN=01&UNPR_DVSN=01&FUND_STTL_ICLD_YN=N&FNCG_AMT_AUTO_RDPT_YN=N&PRCS_DVSN=00&CTX_AREA_FK100={ctx_area_fk100}&CTX_AREA_NK100={ctx_area_nk100}",
+                    headers=req_header,
+                    timeout=self.timeout,
+                )
+                resp_json = orjson_loads(resp.content)
+                if resp_json.get("rt_cd", "") != "0":
+                    raise Exception(resp_json)
+                ctx_area_fk100 = resp_json.get("ctx_area_fk100", "")
+                ctx_area_nk100 = resp_json.get("ctx_area_nk100", "")
+                posit_msgs = resp_json.get("output1", [])
+                for posit_msg in posit_msgs:
+                    code = posit_msg["pdno"]
+                    curr_pos = self.posits.get(code, None)
+                    if curr_pos is None:
+                        self.posits[code] = [0, int(posit_msg["hldg_qty"])]
+                    else:
+                        self.posits[code][1] = int(posit_msg["hldg_qty"])
+                if ctx_area_nk100.strip() == "":
+                    break
+        except Exception as e:
+            self.on_error(self, e)
+
     def get_cash(self) -> list[int]:
         """[pending_cash, active_cash]를 반환합니다.
 
@@ -301,7 +360,7 @@ class KisKrStkTradeRuntime:
         """code 종목의 [pending_qty, active_qty]를 반환합니다.
 
         Args:
-            code: 종목 코드, 예) '252670'
+            code: 종목 코드, 예) '005930'
 
         Note:
             - pending_qty: 아직 체결되지 않은 수량
@@ -398,6 +457,7 @@ class KisKrStkTradeRuntime:
                 headers=self._headers_buy if odrside == "B" else self._headers_sell,
                 timeout=self.timeout,
             )
+            print(resp.content)
             # update order status
             pending_odr = self.orders_pending.pop(locId, None)
             if pending_odr is None:
@@ -428,6 +488,7 @@ class KisKrStkTradeRuntime:
                     self.posits[code][0] -= odrqty
                 else:
                     self.posits[code][0] += odrqty
+                self.on_error(self, Exception(f"Order rejected: {resp_json}"))
 
             self.on_order_cash(self, resp_json)
         except Exception as e:
@@ -473,7 +534,7 @@ class KisKrStkTradeRuntime:
                 else:
                     self.posits[code][0] += active_odr.qty
             else:  # order rejected
-                pass
+                self.on_error(self, Exception(f"Order rejected: {resp_json}"))
 
             self.on_order_cancel(self, resp_json)
         except Exception as e:
@@ -529,7 +590,7 @@ class KisKrStkTradeRuntime:
         odrqty: int,
         odrprc: int,
         exgcode: str = "KRX",
-    ) -> MaybeError:
+    ) -> None:
         """현금 주문
 
         https://apiportal.koreainvestment.com/apiservice-apiservice?/uapi/domestic-stock/v1/trading/order-cash
@@ -548,15 +609,23 @@ class KisKrStkTradeRuntime:
             pending_cash -= odrqty * odrprc
             pending_pos += odrqty
             if (pending_cash + active_cash) < 0:
-                return ErrInsufficientCash(
-                    f"code:{code}, cash: {pending_cash + active_cash} < 0"
+                self.on_error(
+                    self,
+                    ErrInsufficientCash(
+                        f"code:{code}, cash: {pending_cash + active_cash} < 0"
+                    ),
                 )
+                return
         else:
             pending_pos -= odrqty
             if (pending_pos + active_pos) < 0:
-                return ErrInsufficientPosition(
-                    f"code:{code}, pos: {pending_pos + active_pos} < 0"
+                self.on_error(
+                    self,
+                    ErrInsufficientPosition(
+                        f"code:{code}, pos: {pending_pos + active_pos} < 0"
+                    ),
                 )
+                return
         self.cash[0] = pending_cash
         self.posits[code][0] = pending_pos
 
@@ -566,7 +635,6 @@ class KisKrStkTradeRuntime:
         )
         task.add_done_callback(self._background_tasks.discard)
         self._background_tasks.add(task)
-        return None
 
     def order_cancel(
         self,
@@ -575,7 +643,7 @@ class KisKrStkTradeRuntime:
         odrqty: int,
         allqty: str = "Y",
         exgcode: str = "KRX",
-    ) -> MaybeError:
+    ) -> None:
         """주문 취소
 
         https://apiportal.koreainvestment.com/apiservice-apiservice?/uapi/domestic-stock/v1/trading/order-rvsecncl
@@ -589,14 +657,14 @@ class KisKrStkTradeRuntime:
         """
         oodr = self.orders_active.setdefault(code, {}).get(odrno, None)
         if oodr is None:
-            return ErrOrderNotFound(f"Order[{odrno}] not found")
+            self.on_error(self, ErrOrderNotFound(f"Order[{odrno}] not found"))
+            return
         task = self._loop.create_task(
             self._async_order_cancel(odrno, code, odrqty, allqty, exgcode),
             # eager_start = True
         )
         task.add_done_callback(self._background_tasks.discard)
         self._background_tasks.add(task)
-        return None
 
 
 class RestKrStock:
