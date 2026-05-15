@@ -1,11 +1,9 @@
 import asyncio
 from dataclasses import dataclass
 from enum import StrEnum
-from this import s
 from typing import Callable, Iterable, Literal, TypeAlias, Union
 
 from gufo.http import RequestMethod, Response
-from numpy import acos
 from orjson import loads as orjson_loads
 
 from bknet.kis.core import KisHttpClient, KisWsClient
