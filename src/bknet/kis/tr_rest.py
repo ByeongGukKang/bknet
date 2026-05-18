@@ -457,7 +457,6 @@ class KisKrStkTradeRuntime:
                 headers=self._headers_buy if odrside == "B" else self._headers_sell,
                 timeout=self.timeout,
             )
-            print(resp.content)
             # update order status
             pending_odr = self.orders_pending.pop(locId, None)
             if pending_odr is None:
@@ -514,11 +513,10 @@ class KisKrStkTradeRuntime:
             resp = await self.http_client.request(
                 method=RequestMethod.POST,  # type: ignore
                 params="/uapi/domestic-stock/v1/trading/order-rvsecncl",
-                body=f'{{"CANO":"{self.cano}","ACNT_PRDT_CD":"{self.acnt_prdt_cd}","ORGN_ODNO":"{odrno}","ORD_DVSN":"02","RVSE_CNCL_DVSN_CD":"{allqty}","ORD_QTY":"{odrqty}","ORD_UNPR":"0","QTY_ALL_ORD_YN":"{allqty}","EXCG_ID_DVSN_CD":"{exgcode}"}}'.encode(),
+                body=f'{{"CANO":"{self.cano}","ACNT_PRDT_CD":"{self.acnt_prdt_cd}","ORGN_ODNO":"{odrno}","ORD_DVSN":"00","RVSE_CNCL_DVSN_CD":"02","ORD_QTY":"{odrqty}","ORD_UNPR":"0","QTY_ALL_ORD_YN":"{allqty}","EXCG_ID_DVSN_CD":"{exgcode}"}}'.encode(),
                 headers=self._headers_cancel,
                 timeout=self.timeout,
             )
-
             self.orders_pending.pop(locId, None)
             resp_json: dict = orjson_loads(resp.content)
             rt_cd = resp_json.get("rt_cd", "")
