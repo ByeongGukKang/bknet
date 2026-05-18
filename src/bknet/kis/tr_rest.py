@@ -3,12 +3,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Callable, Iterable, Literal, TypeAlias, Union
 
-import curl_cffi
 from gufo.http import RequestMethod, Response
 from orjson import loads as orjson_loads
 
 from bknet.kis.core import KisHttpClient, KisWsClient
 from bknet.kis.tr_websocket import WsKrStkExecAlert
+from bknet.src import ForceNew
 
 
 class KrOrderKind(StrEnum):
@@ -161,7 +161,7 @@ class KrStkOrder:
     prc: int
 
 
-class KisKrStkTradeRuntime:
+class KisKrStkTradeRuntime(ForceNew):
     cano: str
     acnt_prdt_cd: str
     http_client: KisHttpClient
@@ -196,8 +196,9 @@ class KisKrStkTradeRuntime:
     _loop: asyncio.AbstractEventLoop
     _locId: int
 
-    def __init__(
-        self,
+    @classmethod
+    async def New(
+        cls,
         cano: str,
         acnt_prdt_cd: str,
         hts_id: str,
@@ -229,17 +230,18 @@ class KisKrStkTradeRuntime:
         - ws_clinet에 자동으로 WsKrStkExecAlert 등록, 체결 메시지 수신 시 on_order_executed 호출.
         - ws_clinet에 WsKrStkExecAlert 콜백을 덮어쓰지 마세요.
         """
-        self.cano = cano
-        self.acnt_prdt_cd = acnt_prdt_cd
-        self.http_client = http_client
-        self.on_order_cash = on_order_cash
-        self.on_order_cancel = on_order_cancel
-        self.on_order_executed = on_order_executed
-        self.on_error = on_error
-        self.timeout = timeout
+        instance = cls(cls._prevented)
+        instance.cano = cano
+        instance.acnt_prdt_cd = acnt_prdt_cd
+        instance.http_client = http_client
+        instance.on_order_cash = on_order_cash
+        instance.on_order_cancel = on_order_cancel
+        instance.on_order_executed = on_order_executed
+        instance.on_error = on_error
+        instance.timeout = timeout
 
-        self.cash = [0.0, 0.0]
-        self.posits = {}
+        instance.cash = [0.0, 0.0]
+        instance.posits = {}
 
         base_headers = {
             "content-type": b"application/json",
@@ -250,29 +252,20 @@ class KisKrStkTradeRuntime:
         }
 
         # header types per order type, tr_id is different for buy/sell/cancel, illiminate header copying
-        self._headers_buy = base_headers.copy()
-        self._headers_buy["tr_id"] = b"TTTC0012U"  # Buy
-        self._headers_sell = base_headers.copy()
-        self._headers_sell["tr_id"] = b"TTTC0011U"  # Sell
-        self._headers_cancel = base_headers.copy()
-        self._headers_cancel["tr_id"] = b"TTTC0013U"  # Adjust & Cancel
+        instance._headers_buy = base_headers.copy()
+        instance._headers_buy["tr_id"] = b"TTTC0012U"  # Buy
+        instance._headers_sell = base_headers.copy()
+        instance._headers_sell["tr_id"] = b"TTTC0011U"  # Sell
+        instance._headers_cancel = base_headers.copy()
+        instance._headers_cancel["tr_id"] = b"TTTC0013U"  # Adjust & Cancel
 
-        self.orders_pending = {}
-        self.orders_active = {}
-        # executed message received before order accepted message
-        self.orders_orphan = {}
-        """exgId -> list[tuple[exeqty, exeprc, exgcode]]"""
+        instance.orders_pending = {}
+        instance.orders_active = {}
+        instance.orders_orphan = {}  # executed message received before order accepted message
 
-        self._background_tasks = set()
-        self._loop = asyncio.get_event_loop()
-        self._locId = 0
-
-        task_update_cash = self._loop.create_task(self.update_cash())
-        task_update_cash.add_done_callback(self._background_tasks.discard)
-        self._background_tasks.add(task_update_cash)
-        task_update_posit = self._loop.create_task(self.update_posits())
-        task_update_posit.add_done_callback(self._background_tasks.discard)
-        self._background_tasks.add(task_update_posit)
+        instance._background_tasks = set()
+        instance._loop = asyncio.get_event_loop()
+        instance._locId = 0
 
         def handle_WsKrStkExecAlert(_: KisWsClient, msg: list[bytes]) -> None:
             if msg[13] == b"1":  # not executed message
@@ -283,19 +276,26 @@ class KisKrStkTradeRuntime:
             exeqty = int(msg[9])
             exeprc = int(msg[10])
             exgcode = msg[19].decode()
-            err = self._handle_order_executed(
+            err = instance._handle_order_executed(
                 code, odrside, exeqty, exeprc, exgId, exgcode
             )
             if err is None:
-                on_order_executed(self, code, odrside, exeqty, exeprc, exgcode)
+                instance.on_order_executed(
+                    instance, code, odrside, exeqty, exeprc, exgcode
+                )
             else:
-                self.on_error(self, err)
+                instance.on_error(instance, err)
 
         ws_client._callbacks[WsKrStkExecAlert.TrId.encode()] = (
             WsKrStkExecAlert.TrLength,
             handle_WsKrStkExecAlert,
         )
         ws_client.subscribe(WsKrStkExecAlert.TrId, hts_id)
+
+        await instance.update_cash()
+        await instance.update_posits()
+
+        return instance
 
     async def update_cash(self):
         """현재 현금 잔고를 조회하여 self.cash를 업데이트합니다."""

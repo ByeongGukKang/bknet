@@ -30,12 +30,12 @@ class KisHttpClient(HttpWrapper, ForceNew):
     """Customer type. 'P' for individual, 'B' for corporate."""
 
     # Authentication state
-    # auth_token: str
-    # """OAuth2 access token for API authentication."""
-    # auth_token_expiry: datetime.datetime
-    # """Expiration time of the OAuth2 access token."""
-    # websocket_key: str
-    # """Websocket access key for KIS websocket connection."""
+    auth_token: str
+    """OAuth2 access token for API authentication."""
+    auth_token_expiry: datetime.datetime
+    """Expiration time of the OAuth2 access token."""
+    websocket_key: str
+    """Websocket access key for KIS websocket connection."""
 
     # API rate limit management
     _api_limit_queue: asyncio.Queue[None]
@@ -76,7 +76,7 @@ class KisHttpClient(HttpWrapper, ForceNew):
         async def _refresh_api_limit():
             try:
                 while True:
-                    await asyncio.sleep(1.0)  # 1초마다 깔끔하게 리프레시
+                    await asyncio.sleep(1.0)  # refresh API limit every 1 second
                     while not instance._api_limit_queue.full():
                         instance._api_limit_queue.put_nowait(None)
             except asyncio.CancelledError:
