@@ -207,7 +207,8 @@ class KisKrStkTradeRuntime(ForceNew):
         on_order_cash: Callable[["KisKrStkTradeRuntime", dict], None],
         on_order_cancel: Callable[["KisKrStkTradeRuntime", dict], None],
         on_order_executed: Callable[
-            ["KisKrStkTradeRuntime", str, Literal["B", "S"], int, int, str], None
+            ["KisKrStkTradeRuntime", str, Literal["B", "S", "A", "C"], int, int, str],
+            None,
         ],
         on_error: Callable[["KisKrStkTradeRuntime", Exception], None],
         timeout: float = 1.0,
@@ -268,23 +269,37 @@ class KisKrStkTradeRuntime(ForceNew):
         instance._locId = 0
 
         def handle_WsKrStkExecAlert(_: KisWsClient, msg: list[bytes]) -> None:
-            if msg[13] == b"1":  # not executed message
+            if msg[14] == b"1":  # Order Received message
                 return
+
             exgId = msg[2].decode()
             odrside = "S" if msg[4] == b"01" else "B"
             code = msg[8].decode()
             exeqty = int(msg[9])
             exeprc = int(msg[10])
             exgcode = msg[19].decode()
-            err = instance._handle_order_executed(
-                code, odrside, exeqty, exeprc, exgId, exgcode
-            )
-            if err is None:
-                instance.on_order_executed(
-                    instance, code, odrside, exeqty, exeprc, exgcode
+            if msg[5] == b"2":  # Cancel message
+                err = instance._handle_order_cancelled(
+                    code, odrside, exeqty, exeprc, exgId, exgcode
                 )
-            else:
-                instance.on_error(instance, err)
+                if err is None:
+                    instance.on_order_executed(
+                        instance, code, "C", exeqty, exeprc, exgcode
+                    )
+                else:
+                    instance.on_error(instance, err)
+            elif msg[5] == b"1":  # Adjust message
+                pass
+            else:  # execution message
+                err = instance._handle_order_executed(
+                    code, odrside, exeqty, exeprc, exgId, exgcode
+                )
+                if err is None:
+                    instance.on_order_executed(
+                        instance, code, odrside, exeqty, exeprc, exgcode
+                    )
+                else:
+                    instance.on_error(instance, err)
 
         ws_client._callbacks[WsKrStkExecAlert.TrId.encode()] = (
             WsKrStkExecAlert.TrLength,
@@ -436,8 +451,22 @@ class KisKrStkTradeRuntime(ForceNew):
             if odr.code == code and odr.side == side
         )
 
+    def _handle_orphan_orders(self, exgId: str, code: str, odrside: Literal["B", "S"]):
+        orphan_odrs = self.orders_orphan.pop(exgId, None)
+        if orphan_odrs is None:
+            return
+        for exeqty, exeprc, exgcode in orphan_odrs:
+            err = self._handle_order_executed(
+                code, odrside, exeqty, exeprc, exgId, exgcode
+            )
+            if err is None:
+                self.on_order_executed(self, code, odrside, exeqty, exeprc, exgcode)
+            else:
+                self.on_error(self, err)
+
     async def _async_order_cash(
         self,
+        locId: str,
         code: str,
         odrside: Literal["B", "S"],
         odrkind: Union[str, KrOrderKind],
@@ -445,10 +474,6 @@ class KisKrStkTradeRuntime(ForceNew):
         odrprc: int,
         exgcode: str = "KRX",
     ) -> None:
-        locId = self.get_locId()
-        self.orders_pending[locId] = KrStkOrder(
-            locId, "", code, odrside, odrkind, odrqty, odrprc
-        )
         try:
             resp = await self.http_client.request(
                 method=RequestMethod.POST,  # type: ignore
@@ -466,21 +491,8 @@ class KisKrStkTradeRuntime(ForceNew):
             if rt_cd == "0":  # B/S order accepted
                 exgId = resp_json["output"]["ODNO"]
                 pending_odr.exgId = exgId
-
                 self.orders_active.setdefault(code, {})[exgId] = pending_odr
-                orphan_odrs = self.orders_orphan.pop(exgId, None)
-                if orphan_odrs is None:
-                    return
-                for exeqty, exeprc, exgcode in orphan_odrs:
-                    err = self._handle_order_executed(
-                        code, odrside, exeqty, exeprc, exgId, exgcode
-                    )
-                    if err is None:
-                        self.on_order_executed(
-                            self, code, odrside, exeqty, exeprc, exgcode
-                        )
-                    else:
-                        self.on_error(self, err)
+                self._handle_orphan_orders(exgId, code, odrside)
             else:  # order rejected
                 if odrside == "B":
                     self.cash[0] += odrqty * odrprc
@@ -501,14 +513,13 @@ class KisKrStkTradeRuntime(ForceNew):
 
     async def _async_order_cancel(
         self,
+        locId: str,
         odrno: str,
         code: str,
         odrqty: int,
         allqty: str = "Y",
         exgcode: str = "KRX",
     ) -> None:
-        locId = self.get_locId()
-        self.orders_pending[locId] = KrStkOrder(locId, "", code, "C", "00", 0, 0)
         try:
             resp = await self.http_client.request(
                 method=RequestMethod.POST,  # type: ignore
@@ -521,16 +532,7 @@ class KisKrStkTradeRuntime(ForceNew):
             resp_json: dict = orjson_loads(resp.content)
             rt_cd = resp_json.get("rt_cd", "")
             if rt_cd == "0":  # B/S order accepted
-                active_odr = self.orders_active.setdefault(code, {}).pop(odrno, None)
-                if (
-                    active_odr is None
-                ):  # active_odr is None when order is already executed.
-                    return
-                if active_odr.side == "B":
-                    self.cash[0] += active_odr.qty * active_odr.prc
-                    self.posits[code][0] -= active_odr.qty
-                else:
-                    self.posits[code][0] += active_odr.qty
+                pass
             else:  # order rejected
                 self.on_error(self, Exception(f"Order rejected: {resp_json}"))
 
@@ -557,7 +559,7 @@ class KisKrStkTradeRuntime(ForceNew):
                 self.orders_orphan[exgId] = [(exeqty, exeprc, exgcode)]
             else:
                 orphan_odr.append((exeqty, exeprc, exgcode))
-            return OrphanExecutionError(f"Orphan execution received for exgId {exgId}")
+            return OrphanExecutionError(f"Orphan execution received for exgId[{exgId}]")
 
         if odrside == "B":
             posits = self.posits[code]
@@ -570,6 +572,34 @@ class KisKrStkTradeRuntime(ForceNew):
             posits[0] += exeqty
             posits[1] -= exeqty
             self.cash[1] += exeqty * exeprc
+        active_odr.qty -= exeqty
+        if active_odr.qty == 0:
+            del self.orders_active[code][exgId]
+
+        return None
+
+    def _handle_order_cancelled(
+        self,
+        code: str,
+        odrside: Literal["B", "S"],
+        exeqty: int,
+        exeprc: int,
+        exgId: str,
+        exgcode: str,
+    ) -> MaybeError:
+        active_odr = self.orders_active.setdefault(code, {}).get(exgId, None)
+        if active_odr is None:
+            return ErrOrderNotFound(
+                f"(_handle_order_cancelled) Order to cancel not found for exgId[{exgId}]"
+            )
+
+        posits = self.posits.setdefault(code, [0, 0])
+        if odrside == "B":
+            posits[0] -= exeqty
+            self.cash[0] += exeqty * exeprc
+        elif odrside == "S":
+            posits[0] += exeqty
+
         active_odr.qty -= exeqty
         if active_odr.qty == 0:
             del self.orders_active[code][exgId]
@@ -627,8 +657,16 @@ class KisKrStkTradeRuntime(ForceNew):
         self.cash[0] = pending_cash
         self.posits[code][0] = pending_pos
 
+        # Allocate pending order
+        locId = self.get_locId()
+        self.orders_pending[locId] = KrStkOrder(
+            locId, "", code, odrside, odrkind, odrqty, odrprc
+        )
+
         task = self._loop.create_task(
-            self._async_order_cash(code, odrside, odrkind, odrqty, odrprc, exgcode),
+            self._async_order_cash(
+                locId, code, odrside, odrkind, odrqty, odrprc, exgcode
+            ),
             # eager_start = True # type: ignore
         )
         task.add_done_callback(self._background_tasks.discard)
@@ -657,8 +695,13 @@ class KisKrStkTradeRuntime(ForceNew):
         if oodr is None:
             self.on_error(self, ErrOrderNotFound(f"Order[{odrno}] not found"))
             return
+
+        # Allocate pending cancel
+        locId = self.get_locId()
+        self.orders_pending[locId] = KrStkOrder(locId, "", code, "C", "00", 0, 0)
+
         task = self._loop.create_task(
-            self._async_order_cancel(odrno, code, odrqty, allqty, exgcode),
+            self._async_order_cancel(locId, code, odrqty, allqty, exgcode),
             # eager_start = True
         )
         task.add_done_callback(self._background_tasks.discard)
