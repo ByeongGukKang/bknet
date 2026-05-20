@@ -279,12 +279,13 @@ class KisKrStkTradeRuntime(ForceNew):
             exeprc = int(msg[10])
             exgcode = msg[19].decode()
             if msg[5] == b"2":  # Cancel message
+                odrprc = int(msg[25])
                 err = instance._handle_order_cancelled(
-                    code, odrside, exeqty, exeprc, exgId, exgcode
+                    code, odrside, exeqty, odrprc, exgId, exgcode
                 )
                 if err is None:
                     instance.on_order_executed(
-                        instance, code, "C", exeqty, exeprc, exgcode
+                        instance, code, "C", exeqty, odrprc, exgcode
                     )
                 else:
                     instance.on_error(instance, err)
@@ -311,145 +312,6 @@ class KisKrStkTradeRuntime(ForceNew):
         await instance.update_posits()
 
         return instance
-
-    async def update_cash(self):
-        """현재 현금 잔고를 조회하여 self.cash를 업데이트합니다."""
-        req_header = self.http_client.client.headers.copy()  # type: ignore
-        req_header["tr_id"] = b"TTTC0869R"
-        try:
-            resp = await self.http_client.request(
-                method=RequestMethod.GET,  # type: ignore
-                params=f"/uapi/domestic-stock/v1/trading/intgr-margin?CANO={self.cano}&ACNT_PRDT_CD={self.acnt_prdt_cd}&CMA_EVLU_AMT_ICLD_YN=N&WCRC_FRCR_DVSN_CD=02&FWEX_CTRT_FRCR_DVSN_CD=02",
-                headers=req_header,
-                timeout=self.timeout,
-            )
-            resp_json = orjson_loads(resp.content)
-            if resp_json.get("rt_cd", "") != "0":
-                raise Exception(resp_json)
-            self.cash[1] = float(resp_json["output"]["stck_cash_ord_psbl_amt"])
-        except Exception as e:
-            self.on_error(self, e)
-
-    async def update_posits(self):
-        """현재 잔고를 조회하여 self.posits를 업데이트합니다."""
-        req_header = self.http_client.client.headers.copy()  # type: ignore
-        req_header["tr_id"] = b"TTTC8434R"
-        try:
-            ctx_area_fk100 = ""
-            ctx_area_nk100 = ""
-            while True:
-                resp = await self.http_client.request(
-                    method=RequestMethod.GET,  # type: ignore
-                    params=f"/uapi/domestic-stock/v1/trading/inquire-balance?CANO={self.cano}&ACNT_PRDT_CD={self.acnt_prdt_cd}&AFHR_FLPR_YN=N&INQR_DVSN=01&UNPR_DVSN=01&FUND_STTL_ICLD_YN=N&FNCG_AMT_AUTO_RDPT_YN=N&PRCS_DVSN=00&CTX_AREA_FK100={ctx_area_fk100}&CTX_AREA_NK100={ctx_area_nk100}",
-                    headers=req_header,
-                    timeout=self.timeout,
-                )
-                resp_json = orjson_loads(resp.content)
-                if resp_json.get("rt_cd", "") != "0":
-                    raise Exception(resp_json)
-                ctx_area_fk100 = resp_json.get("ctx_area_fk100", "")
-                ctx_area_nk100 = resp_json.get("ctx_area_nk100", "")
-                posit_msgs = resp_json.get("output1", [])
-                for posit_msg in posit_msgs:
-                    code = posit_msg["pdno"]
-                    curr_pos = self.posits.get(code, None)
-                    if curr_pos is None:
-                        self.posits[code] = [0, int(posit_msg["hldg_qty"])]
-                    else:
-                        self.posits[code][1] = int(posit_msg["hldg_qty"])
-                if ctx_area_nk100.strip() == "":
-                    break
-        except Exception as e:
-            self.on_error(self, e)
-
-    def get_cash(self) -> list[int]:
-        """[pending_cash, active_cash]를 반환합니다.
-
-        Note:
-            - pending_cash: 아직 체결되지 않은 주문에 예약된 현금
-            - active_cash: 실제 현금 잔고
-        """
-        return self.cash
-
-    def get_posit(self, code: str) -> list[int]:
-        """code 종목의 [pending_qty, active_qty]를 반환합니다.
-
-        Args:
-            code: 종목 코드, 예) '005930'
-
-        Note:
-            - pending_qty: 아직 체결되지 않은 수량
-            - active_qty: 체결된 수량
-        """
-        return self.posits.get(code, [0, 0])
-
-    def get_active_bids(self, code: str) -> Iterable[KrStkOrder]:
-        """code 종목의 활성 매수 주문들을 반환합니다.
-
-        Args:
-            code: 종목 코드, 예) '005930'
-
-        Note:
-            - 활성 주문: 접수되어 체결을 기다리는 주문
-            - 값이 없는 경우 빈 tuple, 있는 경우 generator를 반환합니다. list가 필요한 경우 list()로 감싸서 사용하세요.
-        """
-        active_orders = self.orders_active.get(code, {})
-        if not active_orders:
-            return ()
-        return (odr for odr in active_orders.values() if odr.side == "B")
-
-    def get_active_asks(self, code: str) -> Iterable[KrStkOrder]:
-        """code 종목의 활성 매도 주문들을 반환합니다.
-
-        Args:
-            code: 종목 코드, 예) '005930'
-
-        Note:
-            - 활성 주문: 접수되어 체결을 기다리는 주문
-            - 값이 없는 경우 빈 tuple, 있는 경우 generator를 반환합니다. list가 필요한 경우 list()로 감싸서 사용하세요.
-        """
-        active_orders = self.orders_active.get(code, {})
-        if not active_orders:
-            return ()
-        return (odr for odr in active_orders.values() if odr.side == "S")
-
-    def get_pending_orders(
-        self, code: str, side: Literal["B", "S", "A", "C"]
-    ) -> Iterable[KrStkOrder]:
-        """code 종목의 side 방향의 모든 예약 주문들을 반환합니다.
-
-        Args:
-            code: 종목 코드, 예) '005930'
-            side: 주문 방향 ['B', 'S', 'A', 'C'] (Buy, Sell, Adjust, Cancel)
-
-        Note:
-            - 예약 주문: 아직 체결되지 않은 주문 (접수 대기 중이거나 접수되어 체결을 기다리는 주문)
-            - 값이 없는 경우 빈 tuple, 있는 경우 generator를 반환합니다. list가 필요한 경우 list()로 감싸서 사용하세요.
-        """
-        if not self.orders_pending:
-            return ()
-        return (
-            odr
-            for odr in self.orders_pending.values()
-            if odr.code == code and odr.side == side
-        )
-
-    def get_pending_orders_any(
-        self, code: str, side: Literal["B", "S", "A", "C"]
-    ) -> bool:
-        """code 종목의 side 방향의 예약 주문의 존재 여부를 반환합니다.
-
-        Args:
-            code: 종목 코드, 예) '005930'
-            side: 주문 방향 ['B', 'S', 'A', 'C'] (Buy, Sell, Adjust, Cancel)
-        """
-        if not self.orders_pending:
-            return False
-        return any(
-            odr
-            for odr in self.orders_pending.values()
-            if odr.code == code and odr.side == side
-        )
 
     def _handle_orphan_orders(self, exgId: str, code: str, odrside: Literal["B", "S"]):
         orphan_odrs = self.orders_orphan.pop(exgId, None)
@@ -583,7 +445,7 @@ class KisKrStkTradeRuntime(ForceNew):
         code: str,
         odrside: Literal["B", "S"],
         exeqty: int,
-        exeprc: int,
+        odrprc: int,
         exgId: str,
         exgcode: str,
     ) -> MaybeError:
@@ -596,7 +458,7 @@ class KisKrStkTradeRuntime(ForceNew):
         posits = self.posits.setdefault(code, [0, 0])
         if odrside == "B":
             posits[0] -= exeqty
-            self.cash[0] += exeqty * exeprc
+            self.cash[0] += exeqty * odrprc
         elif odrside == "S":
             posits[0] += exeqty
 
@@ -606,9 +468,148 @@ class KisKrStkTradeRuntime(ForceNew):
 
         return None
 
+    async def update_cash(self):
+        """현재 현금 잔고를 조회하여 self.cash를 업데이트합니다."""
+        req_header = self.http_client.client.headers.copy()  # type: ignore
+        req_header["tr_id"] = b"TTTC0869R"
+        try:
+            resp = await self.http_client.request(
+                method=RequestMethod.GET,  # type: ignore
+                params=f"/uapi/domestic-stock/v1/trading/intgr-margin?CANO={self.cano}&ACNT_PRDT_CD={self.acnt_prdt_cd}&CMA_EVLU_AMT_ICLD_YN=N&WCRC_FRCR_DVSN_CD=02&FWEX_CTRT_FRCR_DVSN_CD=02",
+                headers=req_header,
+                timeout=self.timeout,
+            )
+            resp_json = orjson_loads(resp.content)
+            if resp_json.get("rt_cd", "") != "0":
+                raise Exception(resp_json)
+            self.cash[1] = float(resp_json["output"]["stck_cash_ord_psbl_amt"])
+        except Exception as e:
+            self.on_error(self, e)
+
+    async def update_posits(self):
+        """현재 잔고를 조회하여 self.posits를 업데이트합니다."""
+        req_header = self.http_client.client.headers.copy()  # type: ignore
+        req_header["tr_id"] = b"TTTC8434R"
+        try:
+            ctx_area_fk100 = ""
+            ctx_area_nk100 = ""
+            while True:
+                resp = await self.http_client.request(
+                    method=RequestMethod.GET,  # type: ignore
+                    params=f"/uapi/domestic-stock/v1/trading/inquire-balance?CANO={self.cano}&ACNT_PRDT_CD={self.acnt_prdt_cd}&AFHR_FLPR_YN=N&INQR_DVSN=01&UNPR_DVSN=01&FUND_STTL_ICLD_YN=N&FNCG_AMT_AUTO_RDPT_YN=N&PRCS_DVSN=00&CTX_AREA_FK100={ctx_area_fk100}&CTX_AREA_NK100={ctx_area_nk100}",
+                    headers=req_header,
+                    timeout=self.timeout,
+                )
+                resp_json = orjson_loads(resp.content)
+                if resp_json.get("rt_cd", "") != "0":
+                    raise Exception(resp_json)
+                ctx_area_fk100 = resp_json.get("ctx_area_fk100", "")
+                ctx_area_nk100 = resp_json.get("ctx_area_nk100", "")
+                posit_msgs = resp_json.get("output1", [])
+                for posit_msg in posit_msgs:
+                    code = posit_msg["pdno"]
+                    curr_pos = self.posits.get(code, None)
+                    if curr_pos is None:
+                        self.posits[code] = [0, int(posit_msg["hldg_qty"])]
+                    else:
+                        self.posits[code][1] = int(posit_msg["hldg_qty"])
+                if ctx_area_nk100.strip() == "":
+                    break
+        except Exception as e:
+            self.on_error(self, e)
+
     def get_locId(self) -> str:
         self._locId += 1
         return str(self._locId)
+
+    def get_cash(self) -> list[int]:
+        """[pending_cash, active_cash]를 반환합니다.
+
+        Note:
+            - pending_cash: 아직 체결되지 않은 주문에 예약된 현금
+            - active_cash: 실제 현금 잔고
+        """
+        return self.cash
+
+    def get_posit(self, code: str) -> list[int]:
+        """code 종목의 [pending_qty, active_qty]를 반환합니다.
+
+        Args:
+            code: 종목 코드, 예) '005930'
+
+        Note:
+            - pending_qty: 아직 체결되지 않은 수량
+            - active_qty: 체결된 수량
+        """
+        return self.posits.get(code, [0, 0])
+
+    def get_active_bids(self, code: str) -> Iterable[KrStkOrder]:
+        """code 종목의 활성 매수 주문들을 반환합니다.
+
+        Args:
+            code: 종목 코드, 예) '005930'
+
+        Note:
+            - 활성 주문: 접수되어 체결을 기다리는 주문
+            - 값이 없는 경우 빈 tuple, 있는 경우 generator를 반환합니다. list가 필요한 경우 list()로 감싸서 사용하세요.
+        """
+        active_orders = self.orders_active.get(code, {})
+        if not active_orders:
+            return ()
+        return (odr for odr in active_orders.values() if odr.side == "B")
+
+    def get_active_asks(self, code: str) -> Iterable[KrStkOrder]:
+        """code 종목의 활성 매도 주문들을 반환합니다.
+
+        Args:
+            code: 종목 코드, 예) '005930'
+
+        Note:
+            - 활성 주문: 접수되어 체결을 기다리는 주문
+            - 값이 없는 경우 빈 tuple, 있는 경우 generator를 반환합니다. list가 필요한 경우 list()로 감싸서 사용하세요.
+        """
+        active_orders = self.orders_active.get(code, {})
+        if not active_orders:
+            return ()
+        return (odr for odr in active_orders.values() if odr.side == "S")
+
+    def get_pending_orders(
+        self, code: str, side: Literal["B", "S", "A", "C"]
+    ) -> Iterable[KrStkOrder]:
+        """code 종목의 side 방향의 모든 예약 주문들을 반환합니다.
+
+        Args:
+            code: 종목 코드, 예) '005930'
+            side: 주문 방향 ['B', 'S', 'A', 'C'] (Buy, Sell, Adjust, Cancel)
+
+        Note:
+            - 예약 주문: 아직 체결되지 않은 주문 (접수 대기 중이거나 접수되어 체결을 기다리는 주문)
+            - 값이 없는 경우 빈 tuple, 있는 경우 generator를 반환합니다. list가 필요한 경우 list()로 감싸서 사용하세요.
+        """
+        if not self.orders_pending:
+            return ()
+        return (
+            odr
+            for odr in self.orders_pending.values()
+            if odr.code == code and odr.side == side
+        )
+
+    def get_pending_orders_any(
+        self, code: str, side: Literal["B", "S", "A", "C"]
+    ) -> bool:
+        """code 종목의 side 방향의 예약 주문의 존재 여부를 반환합니다.
+
+        Args:
+            code: 종목 코드, 예) '005930'
+            side: 주문 방향 ['B', 'S', 'A', 'C'] (Buy, Sell, Adjust, Cancel)
+        """
+        if not self.orders_pending:
+            return False
+        return any(
+            odr
+            for odr in self.orders_pending.values()
+            if odr.code == code and odr.side == side
+        )
 
     def order_cash(
         self,
@@ -701,7 +702,7 @@ class KisKrStkTradeRuntime(ForceNew):
         self.orders_pending[locId] = KrStkOrder(locId, "", code, "C", "00", 0, 0)
 
         task = self._loop.create_task(
-            self._async_order_cancel(locId, code, odrqty, allqty, exgcode),
+            self._async_order_cancel(locId, odrno, code, odrqty, allqty, exgcode),
             # eager_start = True
         )
         task.add_done_callback(self._background_tasks.discard)

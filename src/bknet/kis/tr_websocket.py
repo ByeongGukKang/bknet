@@ -1,19 +1,20 @@
-
 class WebsocketTr:
     TrId: str
     """TR ID for the websocket message. Must be defined in subclasses."""
     TrLength: int
     """Length of the TR message in bytes. Must be defined in subclasses."""
 
+
 class WsKrxStkExec(WebsocketTr):
     """국내주식체결 [KRX]
 
     https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0STCNT0
     """
-    TrId = 'H0STCNT0'
+
+    TrId = "H0STCNT0"
     TrLength = 46
 
-    Code = 0 
+    Code = 0
     "[0] 종목코드"
     ExecTime = 1
     "[1] 체결시간"
@@ -56,12 +57,14 @@ class WsKrxStkExec(WebsocketTr):
     ViPrice = 45
     "[45] VI발동가격"
 
+
 class WsKrxStkBook(WebsocketTr):
     """국내주식호가 [KRX]
 
     https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0STASP0
     """
-    TrId = 'H0STASP0'
+
+    TrId = "H0STASP0"
     TrLength = 59
 
     Code = 0
@@ -157,18 +160,20 @@ class WsKrxStkBook(WebsocketTr):
     BqSumDiff = 55
     "총 매수호가 잔량 증감"
 
+
 class WsKrStkExecAlert(WebsocketTr):
     """국내주식 실시간체결통보
 
-    https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0STCNI0    """
-    TrId = 'H0STCNI0'
+    https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0STCNI0"""
+
+    TrId = "H0STCNI0"
     TrLength = 24
 
     CustId = 0
     "[0] 고객 ID"
     AcntNo = 1
     "[1] 계좌번호"
-    OderNo = 2
+    OdrNo = 2
     "[2] 주문번호"
     OoderNo = 3
     "[3] 원주문번호"
@@ -176,9 +181,9 @@ class WsKrStkExecAlert(WebsocketTr):
     "[4] 매도/매수 구분, 01:매도, 02:매수"
     RctfCls = 5
     "[5] 정정/취소 구분, 0:정상, 1:정정, 2:취소"
-    OderKind = 6
+    OdrKind = 6
     "[6] 주문종류"
-    OderCond = 7
+    OdrCond = 7
     "[7] 주문조건, 0:없음, 1:IOC, 2:FOK"
     Code = 8
     "[8] 종목코드"
@@ -196,13 +201,13 @@ class WsKrStkExecAlert(WebsocketTr):
     "[14] 접수여부, 1:주문접수, 2:확인, 3:취소(IOC/FOK)"
     BrncNo = 15
     "[15] 지점번호"
-    OrdQty = 16
+    OdrQty = 16
     "[16] 주문수량"
     AcntName = 17
     "[17] 계좌명"
-    OrdCondPrc = 18
+    OdrCondPrc = 18
     "[18] 주문조건가격"
-    OrdExg = 19
+    OdrExg = 19
     "[19] 주문거래소구분, 1:KRX, 2:NXT, 3:SOR-KRX, 4:SOR-NXT"
     PopupYn = 20
     "[20] 실시간체결창 표시여부, Y/N"
@@ -214,63 +219,77 @@ class WsKrStkExecAlert(WebsocketTr):
     "[23] 신용대출일자"
     StkName = 24
     "[24] 종목명"
-    OrdPrc = 25
+    OdrPrc = 25
     "[25] 주문가격"
+
 
 class KrxStkAfterMarketBook(WebsocketTr):
     """국내주식시간외호가 [KRX]
 
     https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0STOAA0
     """
-    TrId = 'H0STOAA0'
+
+    TrId = "H0STOAA0"
     TrLength = 54
+
 
 class KrxStkAfterMarketExec(WebsocketTr):
     """국내주식시간외체결 [KRX]
 
     https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0STOUP0
     """
-    TrId = 'H0STOUP0'
+
+    TrId = "H0STOUP0"
     TrLength = 43
+
 
 class AggStkExec(WebsocketTr):
     """국내주식체결 [통합]
 
     https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0UNCNT0
     """
-    TrId = 'H0UNCNT0'
+
+    TrId = "H0UNCNT0"
     TrLength = 46
+
 
 class AggStkBook(WebsocketTr):
     """국내주식호가 [통합]
 
     https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0UNASP0
     """
-    TrId = 'H0UNASP0'
+
+    TrId = "H0UNASP0"
     TrLength = 65
+
 
 class NxtStkExec(WebsocketTr):
     """국내주식체결 [NXT]
 
     https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0NXCNT0
     """
-    TrId = 'H0NXCNT0'
+
+    TrId = "H0NXCNT0"
     TrLength = 46
+
 
 class NxtStkBook(WebsocketTr):
     """국내주식호가 [NXT]
 
     https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0NXASP0
     """
-    TrId = 'H0NXASP0'
+
+    TrId = "H0NXASP0"
     TrLength = 65
+
 
 class WsKrxIdxFutBook(WebsocketTr):
     """국내지수선물호가 [KRX]
 
     https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0IFASP0
     """
-    TrId = 'H0IFASP0'
+
+    TrId = "H0IFASP0"
     TrLength = 38
 
     Code = 0
@@ -350,12 +369,14 @@ class WsKrxIdxFutBook(WebsocketTr):
     BqSumDiff = 37
     "총 매수호가 잔량 증감"
 
+
 class WsKrxIdxFutExec(WebsocketTr):
     """국내지수선물체결 [KRX]
 
     https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0IFCNT0
     """
-    TrId = 'H0IFCNT0'
+
+    TrId = "H0IFCNT0"
     TrLength = 50
 
     Code = 0
