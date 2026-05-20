@@ -276,7 +276,6 @@ class KisKrStkTradeRuntime(ForceNew):
             odrside = "S" if msg[4] == b"01" else "B"
             code = msg[8].decode()
             exeqty = int(msg[9])
-            exeprc = int(msg[10])
             exgcode = msg[19].decode()
             if msg[5] == b"2":  # Cancel message
                 # remove pending cancel order
@@ -284,7 +283,7 @@ class KisKrStkTradeRuntime(ForceNew):
 
                 odrprc = int(msg[25])
                 err = instance._handle_order_cancelled(
-                    code, odrside, exeqty, odrprc, exgId, exgcode
+                    code, odrside, exeqty, odrprc, exgId
                 )
                 if err is None:
                     instance.on_order_executed(
@@ -295,6 +294,7 @@ class KisKrStkTradeRuntime(ForceNew):
             elif msg[5] == b"1":  # Adjust message
                 pass
             else:  # execution message
+                exeprc = int(msg[10])
                 err = instance._handle_order_executed(
                     code, odrside, exeqty, exeprc, exgId, exgcode
                 )
@@ -400,10 +400,12 @@ class KisKrStkTradeRuntime(ForceNew):
             if rt_cd == "0":  # B/S order accepted
                 pass
             else:  # order rejected
+                self.orders_pending.pop(odrno, None)
                 self.on_error(self, Exception(f"Order rejected: {resp_json}"))
 
             self.on_order_cancel(self, resp_json)
         except Exception as e:
+            self.orders_pending.pop(odrno, None)
             self.on_error(self, e)
 
     def _handle_order_executed(
@@ -450,7 +452,6 @@ class KisKrStkTradeRuntime(ForceNew):
         exeqty: int,
         odrprc: int,
         exgId: str,
-        exgcode: str,
     ) -> MaybeError:
         active_odr = self.orders_active.setdefault(code, {}).get(exgId, None)
         if active_odr is None:
@@ -575,7 +576,7 @@ class KisKrStkTradeRuntime(ForceNew):
     def get_pending_orders(
         self, code: str, side: Literal["B", "S", "A", "C"]
     ) -> Iterable[KrStkOrder]:
-        """code 종목의 side 방향의 모든 예약 주문들을 반환합니다.
+        """code 종목의 side 방향의 모든 OnWire/OnWait 주문들을 반환합니다.
 
         Args:
             code: 종목 코드, 예) '005930'
@@ -694,6 +695,10 @@ class KisKrStkTradeRuntime(ForceNew):
         oodr = self.orders_active.setdefault(code, {}).get(odrno, None)
         if oodr is None:
             self.on_error(self, ErrOrderNotFound(f"Order[{odrno}] not found"))
+            return
+
+        # If cancel is ongoing, return immediately to prevent duplicate cancel attempts.
+        if odrno in self.orders_pending:
             return
 
         # Allocate pending cancel,

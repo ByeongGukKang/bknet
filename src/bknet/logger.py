@@ -1,6 +1,6 @@
 import atexit
-import multiprocessing as mp
-from queue import Empty, Full
+import queue
+import threading
 
 
 class LoggerWithBuffer:
@@ -25,23 +25,23 @@ class LoggerWithBuffer:
         self.fileIo.close()
 
 
-class LoggerProcess:
+class LoggerThread:
     def __init__(
         self,
         log_file_path: str,
-        process_name: str = "bknet_LoggerProcess",
+        thread_name: str = "bknet_LoggerThread",
         maxsize: int = 2048,
         use_print: bool = False,
     ):
         self.use_print = use_print
-        self.log_queue: mp.Queue = mp.Queue(maxsize=maxsize)
-        self.logger_process = mp.Process(
-            target=self._logger_process,
-            name=process_name,
+        self.log_queue: queue.Queue = queue.Queue(maxsize=maxsize)
+        self.logger_thread = threading.Thread(
+            target=self._logger_thread,
+            name=thread_name,
             args=(log_file_path,),
             daemon=True,
         )
-        self.logger_process.start()
+        self.logger_thread.start()
 
         atexit.register(self.close)
 
@@ -50,18 +50,18 @@ class LoggerProcess:
             print(message)
         try:
             self.log_queue.put_nowait(message)
-        except Full:
+        except queue.Full:
             pass
 
     def close(self):
-        if self.logger_process.is_alive():
+        if self.logger_thread.is_alive():
             try:
                 self.log_queue.put(None, timeout=1.0)
-            except Full:
+            except queue.Full:
                 pass
-            self.logger_process.join(timeout=5.0)
+            self.logger_thread.join(timeout=5.0)
 
-    def _logger_process(self, log_file_path: str):
+    def _logger_thread(self, log_file_path: str):
         with open(log_file_path, "a", buffering=1) as log_file:
             while True:
                 try:
@@ -80,7 +80,7 @@ class LoggerProcess:
                             return  # terminate immediately if termination signal is received
                         log_file.write(f"{msg}\n")
 
-                except Empty:
+                except queue.Empty:
                     continue
                 except Exception:
                     break
