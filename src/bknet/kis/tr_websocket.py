@@ -175,7 +175,7 @@ class WsKrStkExecAlert(WebsocketTr):
     "[1] 계좌번호"
     OdrNo = 2
     "[2] 주문번호"
-    OoderNo = 3
+    OodrNo = 3
     "[3] 원주문번호"
     SelnByovCls = 4
     "[4] 매도/매수 구분, 01:매도, 02:매수"

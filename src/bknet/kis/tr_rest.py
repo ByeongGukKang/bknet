@@ -279,6 +279,9 @@ class KisKrStkTradeRuntime(ForceNew):
             exeprc = int(msg[10])
             exgcode = msg[19].decode()
             if msg[5] == b"2":  # Cancel message
+                # remove pending cancel order
+                instance.orders_pending.pop(msg[3].decode(), None)
+
                 odrprc = int(msg[25])
                 err = instance._handle_order_cancelled(
                     code, odrside, exeqty, odrprc, exgId, exgcode
@@ -312,6 +315,10 @@ class KisKrStkTradeRuntime(ForceNew):
         await instance.update_posits()
 
         return instance
+
+    def _get_locId(self) -> str:
+        self._locId += 1
+        return str(self._locId)
 
     def _handle_orphan_orders(self, exgId: str, code: str, odrside: Literal["B", "S"]):
         orphan_odrs = self.orders_orphan.pop(exgId, None)
@@ -375,9 +382,7 @@ class KisKrStkTradeRuntime(ForceNew):
 
     async def _async_order_cancel(
         self,
-        locId: str,
         odrno: str,
-        code: str,
         odrqty: int,
         allqty: str = "Y",
         exgcode: str = "KRX",
@@ -390,7 +395,6 @@ class KisKrStkTradeRuntime(ForceNew):
                 headers=self._headers_cancel,
                 timeout=self.timeout,
             )
-            self.orders_pending.pop(locId, None)
             resp_json: dict = orjson_loads(resp.content)
             rt_cd = resp_json.get("rt_cd", "")
             if rt_cd == "0":  # B/S order accepted
@@ -400,7 +404,6 @@ class KisKrStkTradeRuntime(ForceNew):
 
             self.on_order_cancel(self, resp_json)
         except Exception as e:
-            self.orders_pending.pop(locId, None)
             self.on_error(self, e)
 
     def _handle_order_executed(
@@ -517,10 +520,6 @@ class KisKrStkTradeRuntime(ForceNew):
                     break
         except Exception as e:
             self.on_error(self, e)
-
-    def get_locId(self) -> str:
-        self._locId += 1
-        return str(self._locId)
 
     def get_cash(self) -> list[int]:
         """[pending_cash, active_cash]를 반환합니다.
@@ -659,7 +658,7 @@ class KisKrStkTradeRuntime(ForceNew):
         self.posits[code][0] = pending_pos
 
         # Allocate pending order
-        locId = self.get_locId()
+        locId = self._get_locId()
         self.orders_pending[locId] = KrStkOrder(
             locId, "", code, odrside, odrkind, odrqty, odrprc
         )
@@ -697,12 +696,13 @@ class KisKrStkTradeRuntime(ForceNew):
             self.on_error(self, ErrOrderNotFound(f"Order[{odrno}] not found"))
             return
 
-        # Allocate pending cancel
-        locId = self.get_locId()
-        self.orders_pending[locId] = KrStkOrder(locId, "", code, "C", "00", 0, 0)
+        # Allocate pending cancel,
+        locId = self._get_locId()
+        # Cancel orders are special, key for orders_pending is not locId, but the original order number(odrno)
+        self.orders_pending[odrno] = KrStkOrder(locId, "", code, "C", "00", 0, 0)
 
         task = self._loop.create_task(
-            self._async_order_cancel(locId, odrno, code, odrqty, allqty, exgcode),
+            self._async_order_cancel(odrno, odrqty, allqty, exgcode),
             # eager_start = True
         )
         task.add_done_callback(self._background_tasks.discard)
