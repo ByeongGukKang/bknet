@@ -62,7 +62,7 @@ class LoggerThread:
             self.logger_thread.join(timeout=5.0)
 
     def _logger_thread(self, log_file_path: str):
-        with open(log_file_path, "a", buffering=1) as log_file:
+        with open(log_file_path, "a", buffering=1, encoding="utf-8") as log_file:
             while True:
                 try:
                     msg = self.log_queue.get()

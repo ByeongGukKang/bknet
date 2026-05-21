@@ -48,7 +48,7 @@ class KisHttpClient(HttpWrapper, ForceNew):
         appsecret: str,
         custtype: str = "P",
         url: str = "https://openapi.koreainvestment.com:9443",
-        api_limit: int = 19,
+        api_limit: int = 17,
         *args,
         **kwargs,
     ):
@@ -59,7 +59,7 @@ class KisHttpClient(HttpWrapper, ForceNew):
             appsecret: API app secret issued by KIS.
             custtype: Customer type. 'P' for individual, 'B' for corporate. Default is 'P'.
             url: Base URL for the KIS open API. Default is 'https://openapi.koreainvestment.com:9443'.
-            api_limit: Maximum number of API requests per second. Default is 19, which is the documented 20 - 1(buffer) for the KIS open API.
+            api_limit: Maximum number of API requests per second. Default is 17, which is the documented 18 - 1(buffer) for the KIS open API.
         """
         instance = cls(cls._prevented)
         instance.client = HttpClient(*args, **kwargs)
@@ -201,8 +201,8 @@ class KisWsClient(WebsocketWrapper):
     async def New(
         cls,
         http_client: KisHttpClient,
-        on_connected: Callable[[Self], None],
-        on_disconnected: Callable[[Self], None],
+        on_connected: Callable[[Self], None] = lambda self: None,
+        on_disconnected: Callable[[Self], None] = lambda self: None,
         on_frame: dict[type[WebsocketTr], Callable[[Self, list[bytes]], None]] = {},
         on_frame_default: Callable[[Self, list[bytes]], None] = lambda self, msg: None,
         url: str = "ws://ops.koreainvestment.com:21000",
@@ -282,24 +282,32 @@ class KisWsClient(WebsocketWrapper):
         for i in range(msg_cnt):
             callback(self, msg_splited[i * trlen : (i + 1) * trlen])
 
-    def set_on_frame(
-        self, callbacks: dict[type[WebsocketTr], Callable[[Self, list[bytes]], None]]
+    def set_callbacks(
+        self,
+        on_connected: Optional[Callable[[Self], None]] = None,
+        on_disconnected: Optional[Callable[[Self], None]] = None,
+        on_frame: Optional[
+            dict[type[WebsocketTr], Callable[[Self, list[bytes]], None]]
+        ] = None,
+        on_frame_default: Optional[Callable[[Self, list[bytes]], None]] = None,
     ):
-        """Set the on_frame callbacks.
-
-        Args:
-            callbacks: Dictionary mapping WebsocketTr classes to their corresponding callback functions. The callback functions are called when a message with the corresponding tr_id is received. Signature of callback functions: (KisWsClient, list[bytes]) -> None
-        """
-        for tr, callback in callbacks.items():
-            if not issubclass(tr, WebsocketTr):
-                raise ValueError(
-                    f"on_frame keys must be of subclass of WebsocketTr, got {type(tr)}"
-                )
-            if not callable(callback):
-                raise ValueError(
-                    f"on_frame values must be of type Callable with signature (KisWsClient, list[bytes]) -> None, got {type(callback)}"
-                )
-            self._callbacks[tr.TrId.encode()] = (tr.TrLength, callback)
+        if on_connected is not None:
+            self.ws_client.on_ws_connected = on_connected
+        if on_disconnected is not None:
+            self.ws_client.on_ws_disconnected = on_disconnected
+        if on_frame is not None:
+            for tr, callback in on_frame.items():
+                if not issubclass(tr, WebsocketTr):
+                    raise ValueError(
+                        f"on_frame keys must be of subclass of WebsocketTr, got {type(tr)}"
+                    )
+                if not callable(callback):
+                    raise ValueError(
+                        f"on_frame values must be of type Callable with signature (KisWsClient, list[bytes]) -> None, got {type(callback)}"
+                    )
+                self._callbacks[tr.TrId.encode()] = (tr.TrLength, callback)
+        if on_frame_default is not None:
+            self._callback_default = on_frame_default
 
     def subscribe(self, tr_id: str, tr_key: str):
         """실시간 데이터 구독 등록

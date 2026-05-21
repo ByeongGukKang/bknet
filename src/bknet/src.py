@@ -6,7 +6,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from inspect import iscoroutinefunction
 from types import coroutine
-from typing import Callable, Coroutine, Dict, Optional, Self
+from typing import Any, Callable, Coroutine, Dict, Optional, Self
 
 from gufo.http import RequestMethod, Response
 from gufo.http.async_client import HttpClient as gufoHttpClient
@@ -56,8 +56,24 @@ def run_system(main: Coroutine):
     asyncio.run(main)
 
 
+def async_in_def(
+    coro: Callable[Any, Coroutine], bg_task_set: set[asyncio.Task], *args, **kwargs
+):
+    """Run a coroutine in the background and add it to the provided set of background tasks.
+
+    Args:
+        coro: The coroutine function to run in the background.
+        bg_task_set: A set to which the created background task will be added. The task will be automatically removed from the set when it is done.
+        *args: Positional arguments to pass to the coroutine function.
+        **kwargs: Keyword arguments to pass to the coroutine function.
+    """
+    task = asyncio.get_running_loop().create_task(coro(*args, **kwargs))
+    bg_task_set.add(task)
+    task.add_done_callback(bg_task_set.discard)
+
+
 @dataclass(init=False, slots=True)
-class _MemoryPool:
+class MemoryPool:
     slots: deque[object] = field(default_factory=deque)
 
     def __init__(self, type_: type, size: int):
@@ -109,7 +125,9 @@ class _WebsocketClient(WSListener):
     transport: WSTransport
     disconnected_event: asyncio.Event
 
-    async def connect(self, **kwargs):
+    async def connect(
+        self, **kwargs
+    ) -> Coroutine[Any, Any, tuple[WSTransport, WSListener]]:
         """Establish a websocket connection to the server.
 
         Args:
@@ -144,26 +162,40 @@ class WebsocketWrapper(ForceNew):
         instance.disconnected_event = disconnected_event
 
         class WebsocketClientImpl(_WebsocketClient):
+            bg_tasks: set[asyncio.Task] = set()
+
+            on_connected: Callable[[Self], None]
+            on_disconnected: Callable[[Self], None]
+            on_frame: Callable[[Self, WSFrame], None]
+
             def on_ws_connected(self, transport: WSTransport):
                 disconnected_event.clear()
-                on_connected(instance)
+                self.on_connected(instance)
 
             def on_ws_disconnected(self, transport: WSTransport):
                 disconnected_event.set()
-                on_disconnected(instance)
+                self.on_disconnected(instance)
 
             def on_ws_frame(self, transport: WSTransport, frame: WSFrame):
-                on_frame(instance, frame)
+                self.on_frame(instance, frame)
 
             async def connect(self, **kwargs):
                 return await ws_connect(WebsocketClientImpl, url, **kwargs)
 
         instance.ws_client = WebsocketClientImpl()
+        instance.ws_client.on_connected = on_connected
+        instance.ws_client.on_disconnected = on_disconnected
+        instance.ws_client.on_frame = on_frame
         instance.transport, _ = await instance.ws_client.connect()
         return instance
 
-    async def connect(self):
-        await self.ws_client.connect()
+    async def _reconnect(self):
+        "Reconnect to the websocket server"
+        self.transport, _ = await self.ws_client.connect()
+
+    def reconnect(self):
+        "Reconnect to the websocket server"
+        async_in_def(self._reconnect, self.ws_client.bg_tasks)
 
     def send_byte(self, data: bytes):
         """Send binary data to the websocket server.
