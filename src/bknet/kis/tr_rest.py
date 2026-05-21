@@ -441,7 +441,7 @@ class KisKrStkTradeRuntime(ForceNew):
             posits = self.posits[code]
             posits[0] -= exeqty
             posits[1] += exeqty
-            self.cash[0] += exeqty * exeprc
+            self.cash[0] += exeqty * active_odr.prc  # refund pending cash
             self.cash[1] -= exeqty * exeprc
         elif odrside == "S":
             posits = self.posits[code]
@@ -749,7 +749,9 @@ class KisKrStkTradeRuntime(ForceNew):
         # Allocate pending cancel,
         locId = self._get_locId()
         # Cancel orders are special, key for orders_pending is not locId, but the original order number(odrno)
-        self.orders_pending[odrno] = KrStkOrder(locId, "", code, "C", "00", 0, 0)
+        self.orders_pending[odrno] = KrStkOrder(
+            locId, "", code, "C", "00", odrqty, oodr.prc
+        )
 
         task = self._loop.create_task(
             self._async_order_cancel(odrno, odrqty, allqty, exgcode),
