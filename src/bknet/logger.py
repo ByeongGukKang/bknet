@@ -36,7 +36,7 @@ class LoggerThread:
         self.use_print = use_print
         self.log_queue: queue.Queue = queue.Queue(maxsize=maxsize)
         self.logger_thread = threading.Thread(
-            target=self._logger_thread,
+            target=self._run,
             name=thread_name,
             args=(log_file_path,),
             daemon=True,
@@ -61,7 +61,7 @@ class LoggerThread:
                 pass
             self.logger_thread.join(timeout=5.0)
 
-    def _logger_thread(self, log_file_path: str):
+    def _run(self, log_file_path: str):
         with open(log_file_path, "a", buffering=1, encoding="utf-8") as log_file:
             while True:
                 try:

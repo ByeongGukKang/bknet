@@ -145,12 +145,11 @@ class KisHttpClient(HttpWrapper, ForceNew):
         )
         resp_json = orjson_loads(resp.content)
         try:
-            self.auth_token: str = resp_json["access_token"]
+            self.auth_token = resp_json["access_token"]
         except KeyError:
             raise ValueError(f"Authentication failed. Response: {resp_json}")
-        self.auth_token_expiry: datetime.datetime = (
-            datetime.datetime.now()
-            + datetime.timedelta(seconds=int(resp_json["expires_in"]) - 60)
+        self.auth_token_expiry = datetime.datetime.now() + datetime.timedelta(
+            seconds=int(resp_json["expires_in"]) - 60
         )  # 1 minute buffer
 
         # Get Websocket Access Key
@@ -162,7 +161,7 @@ class KisHttpClient(HttpWrapper, ForceNew):
         )
         resp_json = orjson_loads(resp.content)
         try:
-            self.websocket_key: str = resp_json["approval_key"]
+            self.websocket_key = resp_json["approval_key"]
         except KeyError:
             raise ValueError(f"Failed to obtain websocket key. Response: {resp_json}")
 
@@ -233,7 +232,7 @@ class KisWsClient(WebsocketWrapper):
         instance._callback_default = on_frame_default
         return instance
 
-    def _on_frame_wrapper(self: "KisWsClient", frame: WSFrame):
+    def _on_frame_wrapper(self, frame: WSFrame):
         """on_frame wrapper.
 
         Handles decryping encrypted messages, parsing JSON messages, and dispatching messages to the appropriate callbacks based on tr_id.
@@ -292,9 +291,9 @@ class KisWsClient(WebsocketWrapper):
         on_frame_default: Optional[Callable[[Self, list[bytes]], None]] = None,
     ):
         if on_connected is not None:
-            self.ws_client.on_ws_connected = on_connected
+            self.on_ws_connected = on_connected  # type: ignore
         if on_disconnected is not None:
-            self.ws_client.on_ws_disconnected = on_disconnected
+            self.on_ws_disconnected = on_disconnected  # type: ignore
         if on_frame is not None:
             for tr, callback in on_frame.items():
                 if not issubclass(tr, WebsocketTr):
