@@ -1,1 +1,1 @@
-from .core import KisHttpClient, KisWsClient
+from .client import KisHttpClient, KisWsClient

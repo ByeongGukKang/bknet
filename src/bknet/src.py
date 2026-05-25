@@ -2,19 +2,24 @@ import asyncio
 import datetime
 import sys
 import time
+from abc import abstractmethod
 from collections import deque
 from dataclasses import dataclass, field
 from inspect import iscoroutinefunction
 from types import coroutine
-from typing import Callable, Coroutine, Dict, Optional, Self
+from typing import Callable, Coroutine, Dict, Optional, Self, TypeAlias, Union
 
 from gufo.http import RequestMethod, Response
 from gufo.http.async_client import HttpClient as gufoHttpClient
 from picows import WSFrame, WSListener, WSMsgType, WSTransport, ws_connect
 
+### Types
+# Error returnable type
+MaybeError: TypeAlias = Union[None, Exception]
+
 
 ### Macros
-def __MACRO_AS_ASYNC(func):
+def MACRO_AS_ASYNC(func):
     if iscoroutinefunction(func):
         return func
 
@@ -24,18 +29,16 @@ def __MACRO_AS_ASYNC(func):
     return _coro
 
 
-MACRO_AS_ASYNC = __MACRO_AS_ASYNC
-
 MACRO_ASYNC_SLEEP = asyncio.sleep
 MACRO_ASYNC_YIELD = coroutine(lambda: (yield))
 MACRO_TIMESTAMP_NS = time.time_ns
-MACRO_TIMESTAMP_MS = lambda: int(time.time() * 1000)
+MACRO_TIMESTAMP_MS = lambda: int(time.time() * 1000)  # noqa
 MACRO_DATETIME_NOW = datetime.datetime.now
-MACRO_DATETIME_NOW_STR = lambda: datetime.datetime.now().strftime(
+MACRO_DATETIME_NOW_STR = lambda: datetime.datetime.now().strftime(  # noqa
     "%Y-%m-%d %H:%M:%S.%f"
 )
-MACRO_DATETIME_UTCNOW = lambda: datetime.datetime.now(datetime.timezone.utc)
-MACRO_DATETIME_UTCNOW_STR = lambda: datetime.datetime.now(
+MACRO_DATETIME_UTCNOW = lambda: datetime.datetime.now(datetime.timezone.utc)  # noqa
+MACRO_DATETIME_UTCNOW_STR = lambda: datetime.datetime.now(  # noqa
     datetime.timezone.utc
 ).strftime("%Y-%m-%d %H:%M:%S.%f")
 MACRO_PERF_COUNTER = time.perf_counter_ns
@@ -86,26 +89,29 @@ class MemoryPool:
         self.slots.append(obj)
 
 
-class ForceNew:
+class ForceAsyncNew:
     _prevented = object()
     "Use for preventing direct instantiation of classes that inherit from ForceNew. Do not use this object for any other purpose."
 
     def __init__(self, prevented: object, *args, **kwargs):
-        if prevented is not ForceNew._prevented:
+        if prevented is not ForceAsyncNew._prevented:
             raise TypeError(
                 f"{self.__class__.__name__} cannot be instantiated directly. Use .New() instead."
             )
 
+    @classmethod
     async def New(cls, *args, **kwargs) -> Self:
         raise NotImplementedError(
             f"{cls.__class__.__name__} does not implement the .New() method."
         )
 
 
-class HttpWrapper(ForceNew):
+class HttpWrapper(ForceAsyncNew):
+    bg_tasks: set[asyncio.Task] = set()
     url: str
     client: gufoHttpClient
 
+    @abstractmethod
     async def request(
         self,
         method: RequestMethod,
@@ -123,8 +129,8 @@ class HttpWrapper(ForceNew):
 
 class _WebsocketClient(WSListener):
     transport: WSTransport
-    disconnected_event: asyncio.Event
 
+    @abstractmethod
     async def connect(self, **kwargs) -> tuple[WSTransport, WSListener]:
         """Establish a websocket connection to the server.
 
@@ -138,7 +144,7 @@ class _WebsocketClient(WSListener):
         raise NotImplementedError()
 
 
-class WebsocketWrapper(ForceNew):
+class WebsocketWrapper(ForceAsyncNew):
     bg_tasks: set[asyncio.Task] = set()
 
     disconnected_event: asyncio.Event
@@ -162,19 +168,18 @@ class WebsocketWrapper(ForceNew):
     ) -> Self:
 
         instance = cls(cls._prevented)
-        disconnected_event = asyncio.Event()
-        instance.disconnected_event = disconnected_event
+        instance.disconnected_event = asyncio.Event()
         instance.on_ws_connected = on_connected
         instance.on_ws_disconnected = on_disconnected
         instance.on_ws_frame = on_frame
 
         class WebsocketClientImpl(_WebsocketClient):
             def on_ws_connected(self, transport: WSTransport):
-                disconnected_event.clear()
+                instance.disconnected_event.clear()
                 instance.on_ws_connected(instance)
 
             def on_ws_disconnected(self, transport: WSTransport):
-                disconnected_event.set()
+                instance.disconnected_event.set()
                 instance.on_ws_disconnected(instance)
 
             def on_ws_frame(self, transport: WSTransport, frame: WSFrame):

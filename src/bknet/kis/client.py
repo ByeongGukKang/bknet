@@ -12,13 +12,13 @@ from picows import WSFrame
 from pybase64 import b64decode
 
 from bknet.kis.tr_websocket import WebsocketTr
-from bknet.src import ForceNew, HttpWrapper, WebsocketWrapper
+from bknet.src import ForceAsyncNew, HttpWrapper, WebsocketWrapper
 
 
-class KisHttpClient(HttpWrapper, ForceNew):
+class KisHttpClient(HttpWrapper, ForceAsyncNew):
     """Http client for KIS open API.
 
-    use .New() classmethod to create an instance of this class.
+    use .New() to create an instance of this class.
     """
 
     # User initialization parameters
@@ -39,7 +39,6 @@ class KisHttpClient(HttpWrapper, ForceNew):
 
     # API rate limit management
     _api_limit_queue: asyncio.Queue[None]
-    _task_api_limit_refresh: Optional[asyncio.Task]
 
     @classmethod
     async def New(
@@ -82,10 +81,11 @@ class KisHttpClient(HttpWrapper, ForceNew):
             except asyncio.CancelledError:
                 pass
 
-        instance._task_api_limit_refresh = asyncio.create_task(_refresh_api_limit())
-
+        task = asyncio.create_task(_refresh_api_limit())
+        instance.bg_tasks.add(task)
+        task.add_done_callback(instance.bg_tasks.discard)
         # automatically cancel the API limit refresh task when the instance is garbage collected
-        weakref.finalize(instance, instance._task_api_limit_refresh.cancel)
+        weakref.finalize(instance, task.cancel)
 
         # Connect and authenticate with the KIS open API to obtain tokens
         await instance.connect()
@@ -190,10 +190,10 @@ class KisWsClient(WebsocketWrapper):
     _aes_key: bytes = bytes()
     """Encryption key for AES decryption. Obtained from the first JSON message received from the websocket after connection."""
 
-    _callbacks: dict[bytes, Tuple[int, Callable[[Self, list[bytes]], None]]] = {}
+    _callbacks: dict[bytes, Tuple[int, Callable[[Self, list[bytes]], None]]]
     """Dictionary mapping tr_id (as bytes) to a tuple of (tr_length, callback function). The callback function is called when a message with the corresponding tr_id is received. Signature of callback functions: (KisWsClient, list[bytes]) -> None"""
 
-    _callback_default: Callable[[Self, list[bytes]], None] = lambda self, msg: None
+    _callback_default: Callable[[Self, list[bytes]], None]
     """Default callback function that is called when a message with an unregistered tr_id is received. Signature: (KisWsClient, list[bytes]) -> None"""
 
     @classmethod
@@ -219,6 +219,7 @@ class KisWsClient(WebsocketWrapper):
             on_connected, on_disconnected, cls._on_frame_wrapper, url
         )
         instance.http_client = http_client
+        instance._callbacks = {}
         for tr, callback in on_frame.items():
             if not issubclass(tr, WebsocketTr):
                 raise ValueError(
