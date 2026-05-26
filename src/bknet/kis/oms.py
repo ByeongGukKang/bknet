@@ -152,6 +152,7 @@ class KrStkOrder:
     kind: Union[str, KrOrderKind]
     qty: int
     prc: int
+    status: Literal["onwire", "onwait", "partial"]
 
 
 class KisKrStkOMS(ForceAsyncNew):
@@ -364,6 +365,7 @@ class KisKrStkOMS(ForceAsyncNew):
             if rt_cd == "0":  # B/S order accepted
                 exgId = resp_json["output"]["ODNO"]
                 pending_odr.exgId = exgId
+                pending_odr.status = "onwait"
                 self.orders_active.setdefault(code, {})[exgId] = pending_odr
                 self._handle_orphan_orders(exgId, code, odrside)
             else:  # order rejected
@@ -446,6 +448,8 @@ class KisKrStkOMS(ForceAsyncNew):
         active_odr.qty -= exeqty
         if active_odr.qty == 0:
             del self.orders_active[code][exgId]
+        else:
+            active_odr.status = "partial"
 
         return None
 
@@ -473,6 +477,8 @@ class KisKrStkOMS(ForceAsyncNew):
         active_odr.qty -= exeqty
         if active_odr.qty == 0:
             del self.orders_active[code][exgId]
+        else:
+            active_odr.status = "partial"
 
         return None
 
@@ -701,7 +707,7 @@ class KisKrStkOMS(ForceAsyncNew):
         # Allocate pending order
         locId = self._get_locId()
         self.orders_pending[locId] = KrStkOrder(
-            locId, "", code, odrside, odrkind, odrqty, odrprc
+            locId, "", code, odrside, odrkind, odrqty, odrprc, "onwire"
         )
 
         task = self._loop.create_task(
@@ -745,7 +751,7 @@ class KisKrStkOMS(ForceAsyncNew):
         locId = self._get_locId()
         # Cancel orders are special, key for orders_pending is not locId, but the original order number(odrno)
         self.orders_pending[odrno] = KrStkOrder(
-            locId, "", code, "C", "00", odrqty, oodr.prc
+            locId, "", code, "C", "00", odrqty, oodr.prc, "onwire"
         )
 
         task = self._loop.create_task(
