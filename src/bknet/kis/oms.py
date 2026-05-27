@@ -304,12 +304,11 @@ class KisKrStkOMS(ForceAsyncNew):
         exgcode: str = "KRX",
     ) -> None:
         try:
-            resp = await self.http_client.request(
+            resp = await self.http_client.request_unsafe(
                 method=RequestMethod.POST,  # type: ignore
                 params="/uapi/domestic-stock/v1/trading/order-cash",
                 body=f'{{"CANO":"{self.cano}","ACNT_PRDT_CD":"{self.acnt_prdt_cd}","PDNO":"{code}","ORD_DVSN":"{odrkind}","ORD_QTY":"{odrqty}","ORD_UNPR":"{odrprc}","EXCG_ID_DVSN_CD":"{exgcode}"}}'.encode(),
                 headers=self._headers_buy if odrside == "B" else self._headers_sell,
-                timeout=self.timeout,
             )
             # update order status
             pending_odr = self.orders_pending.pop(locId, None)
@@ -349,12 +348,11 @@ class KisKrStkOMS(ForceAsyncNew):
         exgcode: str = "KRX",
     ) -> None:
         try:
-            resp = await self.http_client.request(
+            resp = await self.http_client.request_unsafe(
                 method=RequestMethod.POST,  # type: ignore
                 params="/uapi/domestic-stock/v1/trading/order-rvsecncl",
                 body=f'{{"CANO":"{self.cano}","ACNT_PRDT_CD":"{self.acnt_prdt_cd}","ORGN_ODNO":"{odrno}","ORD_DVSN":"00","RVSE_CNCL_DVSN_CD":"02","ORD_QTY":"{odrqty}","ORD_UNPR":"0","QTY_ALL_ORD_YN":"{allqty}","EXCG_ID_DVSN_CD":"{exgcode}"}}'.encode(),
                 headers=self._headers_cancel,
-                timeout=self.timeout,
             )
             resp_json: dict = orjson_loads(resp.content)
             rt_cd = resp_json.get("rt_cd", "")
@@ -708,6 +706,12 @@ class KisKrStkOMS(ForceAsyncNew):
         self.cash[0] = pending_cash
         self.posits[code][0] = pending_pos
 
+        try:
+            self.http_client._api_limit_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            self.on_error(self, Exception("API rate limit exceeded"))
+            return
+
         # Allocate pending order
         locId = self._get_locId()
         self.orders_pending[locId] = KrStkOrder(
@@ -749,6 +753,12 @@ class KisKrStkOMS(ForceAsyncNew):
 
         # If cancel is ongoing, return immediately to prevent duplicate cancel attempts.
         if odrno in self.orders_pending:
+            return
+
+        try:
+            self.http_client._api_limit_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            self.on_error(self, Exception("API rate limit exceeded"))
             return
 
         # Allocate pending cancel,

@@ -104,7 +104,7 @@ class KisHttpClient(HttpWrapper, ForceAsyncNew):
         headers: Optional[Dict[str, bytes]] = None,
         timeout: float = 1.0,
     ) -> Response:
-        """Make an authenticated request to the KIS open API, respecting the API rate limit.
+        """Make a request to the KIS open API, respecting the API rate limit.
 
         Args:
             method: HTTP method for the request (e.g., GET, POST).
@@ -120,11 +120,40 @@ class KisHttpClient(HttpWrapper, ForceAsyncNew):
             RuntimeError: If the API rate limit is exceeded and the timeout is reached.
         """
         try:
-            await asyncio.wait_for(
-                self._api_limit_queue.get(), timeout=timeout
-            )  # Wait for an available API slot based on the rate limit
-        except (asyncio.TimeoutError, TimeoutError):
-            raise RuntimeError("API rate limit exceeded. Please try again later.")
+            self._api_limit_queue.get_nowait()  # fast path
+        except asyncio.QueueEmpty:
+            try:
+                await asyncio.wait_for(self._api_limit_queue.get(), timeout=timeout)
+            except (asyncio.TimeoutError, TimeoutError):
+                raise RuntimeError("API rate limit exceeded. Please try again later.")
+        return await self.client.request(
+            method,
+            f"{self.url}{params}" if (params is not None) else self.url,
+            body,
+            headers if (headers is not None) else self.client.headers,
+        )
+
+    async def request_unsafe(
+        self,
+        method: RequestMethod,
+        params: Optional[str] = None,
+        body: Optional[bytes] = None,
+        headers: Optional[Dict[str, bytes]] = None,
+    ) -> Response:
+        """unsafe, Make a authenticated request to the KIS open API.
+
+        Args:
+            method: HTTP method for the request (e.g., GET, POST).
+            params: URL parameters to append to the base URL. Optional.
+            body: Request body as bytes. Optional.
+            headers: Additional headers to include in the request. Optional.
+
+        Returns:
+            Response object from the HTTP request.
+
+        Note:
+            This method does not respect the API rate limit and should be used with caution. It is intended for internal use where the caller is responsible for managing the rate limit. For general use, prefer the `request` method which handles rate limiting automatically.
+        """
         return await self.client.request(
             method,
             f"{self.url}{params}" if (params is not None) else self.url,
