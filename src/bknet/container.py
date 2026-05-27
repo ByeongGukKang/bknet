@@ -9,6 +9,7 @@ class BkArr:
     isfull: bool
 
     def __init__(self, base_arr):
+        self.idx_curr = 0
         self.idx_next = 0
         self.maxsize = base_arr.shape[0]
         self.arr = base_arr

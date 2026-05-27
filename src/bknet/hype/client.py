@@ -29,6 +29,8 @@ class HypeHttpClient(HttpWrapper, ForceAsyncNew):
     ) -> Self:
         """Http client for Hyperliquid REST API."""
         instance = cls(cls._prevented)
+        instance.bg_tasks = set()
+
         instance.client = HttpClient(*args, **kwargs)
         instance.client.headers = {"Content-Type": b"application/json"}
         instance.url = url

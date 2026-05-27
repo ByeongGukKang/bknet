@@ -1,4 +1,4 @@
-from bknet.kis import KisHttpClient
+from bknet.kis.client import KisHttpClient
 from bknet.kis.tr_rest import RestKrDerivatives
 from bknet.src import run_system
 

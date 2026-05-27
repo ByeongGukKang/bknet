@@ -50,7 +50,7 @@ class BitgetWsPublic(WebsocketWrapper):
         on_frame: Callable[[WSFrame], None],
         url: str = "wss://ws.bitget.com/v2/ws/public",
     ) -> "BitgetWsPublic":
-        return await cls._new(on_connected, on_disconnected, on_frame, url)
+        return await cls._new(on_connected, on_disconnected, on_frame, url)  # type: ignore
 
     def subscribe(self, instType: InstType, channel: PublicChannel, instId: str):
         self.send_text(
@@ -74,8 +74,8 @@ class BitgetWsPrivate(WebsocketWrapper):
         on_disconnected: Callable[[], None],
         on_frame: Callable[[WSFrame], None],
         url: str = "wss://ws.bitget.com/v2/ws/private",
-    ) -> BitgetWsPrivate:
-        client = await cls._new(on_connected, on_disconnected, on_frame, url)
+    ) -> BitgetWsPrivate:  # noqa
+        client = await cls._new(on_connected, on_disconnected, on_frame, url)  # type: ignore
         # client.ws_client.send_byte()
         return client
 

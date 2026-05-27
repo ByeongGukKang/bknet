@@ -1,5 +1,4 @@
 import asyncio
-import datetime
 import sys
 import time
 from abc import abstractmethod
@@ -9,6 +8,7 @@ from inspect import iscoroutinefunction
 from types import coroutine
 from typing import Callable, Coroutine, Dict, Optional, Self, TypeAlias, Union
 
+import whenever
 from gufo.http import RequestMethod, Response
 from gufo.http.async_client import HttpClient as gufoHttpClient
 from picows import WSFrame, WSListener, WSMsgType, WSTransport, ws_connect
@@ -19,29 +19,82 @@ MaybeError: TypeAlias = Union[None, Exception]
 
 
 ### Macros
-def MACRO_AS_ASYNC(func):
-    if iscoroutinefunction(func):
-        return func
+class Macro:
+    @staticmethod
+    def as_async(func):
+        if iscoroutinefunction(func):
+            return func
 
-    async def _coro(*args, **kwargs):
-        return func(*args, **kwargs)
+        async def _coro(*args, **kwargs):
+            return func(*args, **kwargs)
 
-    return _coro
+        return _coro
 
+    @staticmethod
+    async def async_sleep(seconds: float):
+        return await asyncio.sleep(seconds)
 
-MACRO_ASYNC_SLEEP = asyncio.sleep
-MACRO_ASYNC_YIELD = coroutine(lambda: (yield))
-MACRO_TIMESTAMP_NS = time.time_ns
-MACRO_TIMESTAMP_MS = lambda: int(time.time() * 1000)  # noqa
-MACRO_DATETIME_NOW = datetime.datetime.now
-MACRO_DATETIME_NOW_STR = lambda: datetime.datetime.now().strftime(  # noqa
-    "%Y-%m-%d %H:%M:%S.%f"
-)
-MACRO_DATETIME_UTCNOW = lambda: datetime.datetime.now(datetime.timezone.utc)  # noqa
-MACRO_DATETIME_UTCNOW_STR = lambda: datetime.datetime.now(  # noqa
-    datetime.timezone.utc
-).strftime("%Y-%m-%d %H:%M:%S.%f")
-MACRO_PERF_COUNTER = time.perf_counter_ns
+    @staticmethod
+    async def async_yield():
+        return coroutine(lambda: (yield))
+
+    @staticmethod
+    def timestamp_ms():
+        return time.time_ns() // 1_000_000
+
+    @staticmethod
+    def timestamp_ns():
+        return time.time_ns()
+
+    @staticmethod
+    def nowutc() -> whenever.Instant:
+        return whenever.Instant.now()
+
+    @staticmethod
+    def nowtz(tz: str) -> whenever.ZonedDateTime:
+        """Get the current datetime in the specified timezone.
+
+        Args:
+            tz (str): The timezone to get the current datetime in. e.g.) "Asia/Seoul"
+        """
+        return whenever.Instant.now().to_tz(tz)
+
+    @staticmethod
+    def timedelta(
+        weeks: float = 0,
+        days: float = 0,
+        hours: float = 0,
+        minutes: float = 0,
+        seconds: float = 0,
+        milliseconds: float = 0,
+        microseconds: float = 0,
+        nanoseconds: int = 0,
+        days_assumed_24h_ok: bool = True,
+    ) -> whenever.TimeDelta:
+        return whenever.TimeDelta(
+            weeks=weeks,
+            days=days,
+            hours=hours,
+            minutes=minutes,
+            seconds=seconds,
+            milliseconds=milliseconds,
+            microseconds=microseconds,
+            nanoseconds=nanoseconds,
+            days_assumed_24h_ok=days_assumed_24h_ok,
+        )
+
+    @staticmethod
+    def nowutc_str() -> str:
+        return whenever.Instant.now().format("YYYY-MM-DD hh:mm:ss.fff")
+
+    @staticmethod
+    def nowtz_str(tz: str) -> str:
+        """Get the current datetime in the specified timezone as a formatted string.
+
+        Args:
+            tz (str): The timezone to get the current datetime in. e.g.) "Asia/Seoul"
+        """
+        return whenever.Instant.now().to_tz(tz).format("YYYY-MM-DD hh:mm:ss.fff")
 
 
 def run_system(main: Coroutine):
@@ -107,7 +160,7 @@ class ForceAsyncNew:
 
 
 class HttpWrapper(ForceAsyncNew):
-    bg_tasks: set[asyncio.Task] = set()
+    bg_tasks: set[asyncio.Task]
     url: str
     client: gufoHttpClient
 

@@ -61,6 +61,7 @@ class KisHttpClient(HttpWrapper, ForceAsyncNew):
             api_limit: Maximum number of API requests per second. Default is 17, which is the documented 18 - 1(buffer) for the KIS open API.
         """
         instance = cls(cls._prevented)
+        instance.bg_tasks = set()
         instance.client = HttpClient(*args, **kwargs)
         instance.client.headers = {}
         instance.url = url

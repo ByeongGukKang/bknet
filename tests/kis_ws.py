@@ -1,6 +1,6 @@
 import asyncio
 
-from bknet.kis import KisHttpClient, KisWsClient
+from bknet.kis.client import KisHttpClient, KisWsClient
 from bknet.kis.tr_websocket import WsKrxStkBook
 from bknet.src import run_system
 
