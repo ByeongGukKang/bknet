@@ -158,6 +158,7 @@ class KrStkOrder:
 class KisKrStkOMS(ForceAsyncNew):
     cano: str
     acnt_prdt_cd: str
+    hts_id: str
     http_client: KisHttpClient
     on_order_cash: Callable[[Self, dict], None]
     "on_order_cash(KisKrStkOMS, json)"
@@ -229,7 +230,10 @@ class KisKrStkOMS(ForceAsyncNew):
         instance = cls(cls._prevented)
         instance.cano = cano
         instance.acnt_prdt_cd = acnt_prdt_cd
+        instance.hts_id = hts_id
+
         instance.http_client = http_client
+
         instance.on_order_cash = on_order_cash
         instance.on_order_cancel = on_order_cancel
         instance.on_order_executed = on_order_executed
@@ -263,57 +267,8 @@ class KisKrStkOMS(ForceAsyncNew):
         instance._loop = asyncio.get_running_loop()
         instance._locId = 0
 
-        def handle_WsKrStkExecAlert(_: KisWsClient, msg: list[bytes]) -> None:
-            if msg[14] == b"1":  # Order Received message
-                return
-
-            exgId = msg[2].decode()
-            odrside = "S" if msg[4] == b"01" else "B"
-            code = msg[8].decode()
-            exeqty = int(msg[9])
-            exgcode = msg[19].decode()
-            if msg[5] == b"2":  # Cancel message
-                # Original order id
-                oexgId = msg[3].decode()
-                # remove pending cancel order
-                odr = instance.orders_pending.pop(oexgId, None)
-                if odr is None:
-                    instance.on_error(
-                        instance,
-                        ErrOrderNotFound(
-                            f"Pending cancel order not found for exgId[{oexgId}]"
-                        ),
-                    )
-                    return
-                odrprc = odr.prc
-                err = instance._handle_order_cancelled(
-                    code, odrside, exeqty, odrprc, oexgId
-                )
-                if err is None:
-                    instance.on_order_executed(
-                        instance, code, "C", exeqty, odrprc, exgcode
-                    )
-                else:
-                    instance.on_error(instance, err)
-            elif msg[5] == b"1":  # Adjust message
-                pass
-            else:  # execution message
-                exeprc = int(msg[10])
-                err = instance._handle_order_executed(
-                    code, odrside, exeqty, exeprc, exgId, exgcode
-                )
-                if err is None:
-                    instance.on_order_executed(
-                        instance, code, odrside, exeqty, exeprc, exgcode
-                    )
-                else:
-                    instance.on_error(instance, err)
-
-        ws_client._callbacks[WsKrStkExecAlert.TrId.encode()] = (
-            WsKrStkExecAlert.TrLength,
-            handle_WsKrStkExecAlert,
-        )
-        ws_client.subscribe(WsKrStkExecAlert.TrId, hts_id)
+        # Bind WsKrStkExecAlert handler to ws_client
+        instance.bind_ws_client(ws_client, hts_id)
 
         # Initialize cash and positions
         await instance.update_cash()
@@ -481,6 +436,55 @@ class KisKrStkOMS(ForceAsyncNew):
             active_odr.status = "partial"
 
         return None
+
+    def bind_ws_client(self, ws_client: KisWsClient, hts_id: str):
+        def _handle_WsKrStkExecAlert(_: KisWsClient, msg: list[bytes]) -> None:
+            if msg[14] == b"1":  # Order Received message
+                return
+
+            exgId = msg[2].decode()
+            odrside = "S" if msg[4] == b"01" else "B"
+            code = msg[8].decode()
+            exeqty = int(msg[9])
+            exgcode = msg[19].decode()
+            if msg[5] == b"2":  # Cancel message
+                # Original order id
+                oexgId = msg[3].decode()
+                # remove pending cancel order
+                odr = self.orders_pending.pop(oexgId, None)
+                if odr is None:
+                    self.on_error(
+                        self,
+                        ErrOrderNotFound(
+                            f"Pending cancel order not found for exgId[{oexgId}]"
+                        ),
+                    )
+                    return
+                odrprc = odr.prc
+                err = self._handle_order_cancelled(
+                    code, odrside, exeqty, odrprc, oexgId
+                )
+                if err is None:
+                    self.on_order_executed(self, code, "C", exeqty, odrprc, exgcode)
+                else:
+                    self.on_error(self, err)
+            elif msg[5] == b"1":  # Adjust message
+                pass
+            else:  # execution message
+                exeprc = int(msg[10])
+                err = self._handle_order_executed(
+                    code, odrside, exeqty, exeprc, exgId, exgcode
+                )
+                if err is None:
+                    self.on_order_executed(self, code, odrside, exeqty, exeprc, exgcode)
+                else:
+                    self.on_error(self, err)
+
+        ws_client._callbacks[WsKrStkExecAlert.TrId.encode()] = (
+            WsKrStkExecAlert.TrLength,
+            _handle_WsKrStkExecAlert,
+        )
+        ws_client.subscribe(WsKrStkExecAlert.TrId, hts_id)
 
     def update_all(self):
         """현금 잔고와 모든 종목의 잔고를 조회하여 self.cash와 self.posits를 업데이트합니다."""
