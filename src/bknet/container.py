@@ -34,5 +34,5 @@ class BkArr:
         """
         n = self.maxsize
         mid = n // 2
-        particion = np.partition(self.arr, mid)
+        particion = np.partition(self.arr, [mid - 1, mid])
         return particion[mid] if method == "r" else particion[mid - 1]

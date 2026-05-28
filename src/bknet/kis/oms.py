@@ -1,7 +1,7 @@
 import asyncio
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Callable, Iterable, Literal, Self, Union
+from typing import Callable, Dict, Iterable, Literal, Optional, Self, Union
 
 from gufo.http import RequestMethod
 from orjson import loads as orjson_loads
@@ -168,8 +168,8 @@ class KisKrStkOMS(ForceAsyncNew):
         [Self, str, Literal["B", "S", "A", "C"], int, int, str], None
     ]
     "on_order_executed(KisKrStkOMS, code, odrside, exeqty, exeprc, exgcode)"
-    on_error: Callable[[Self, Exception], None]
-    "on_error(KisKrStkOMS, Exception)"
+    on_error: Callable[[Self, Exception, Optional[Dict]], None]
+    "on_error(KisKrStkOMS, Exception, Optional[Dict])"
     timeout: float = 1.0
 
     cash: list[float]
@@ -206,7 +206,7 @@ class KisKrStkOMS(ForceAsyncNew):
             [Self, str, Literal["B", "S", "A", "C"], int, int, str],
             None,
         ],
-        on_error: Callable[[Self, Exception], None],
+        on_error: Callable[[Self, Exception, Optional[Dict]], None],
         timeout: float = 1.0,
     ) -> Self:
         """KIS 국내주식 실시간 주문/체결 관리
@@ -220,7 +220,7 @@ class KisKrStkOMS(ForceAsyncNew):
             on_order_cash (Callable[[KisKrStkOMS, dict], None]): 현금 주문 결과 콜백, on_order_cash(self, json)
             on_order_cancel (Callable[[KisKrStkOMS, dict], None]): 주문 취소 결과 콜백, on_order_cancel(self, json)
             on_order_executed (Callable[[KisKrStkOMS, str, Literal["B", "S"], int, int, str], None]): 주문 체결 결과 콜백, on_order_executed(self, code, odrside, exeqty, exeprc, exgcode)
-            on_error (Callable[[KisKrStkOMS, Exception], None]): 에러 콜백, on_error(self, Exception)
+            on_error (Callable[[KisKrStkOMS, Exception, Optional[Dict]], None]): 에러 콜백, on_error(self, Exception, Optional[Dict])
             timeout (float): HTTP 요청 타임아웃, default 1.0
 
         Note:
@@ -291,7 +291,7 @@ class KisKrStkOMS(ForceAsyncNew):
             if err is None:
                 self.on_order_executed(self, code, odrside, exeqty, exeprc, exgcode)
             else:
-                self.on_error(self, err)
+                self.on_error(self, err, None)
 
     async def _async_order_cash(
         self,
@@ -328,7 +328,9 @@ class KisKrStkOMS(ForceAsyncNew):
                     self.posits[code][0] -= odrqty
                 else:
                     self.posits[code][0] += odrqty
-                self.on_error(self, Exception(f"Order rejected: {resp_json}"))
+                self.on_error(
+                    self, Exception(f"Order rejected: {resp_json}"), resp_json
+                )
 
             self.on_order_cash(self, resp_json)
         except Exception as e:
@@ -338,7 +340,7 @@ class KisKrStkOMS(ForceAsyncNew):
                 self.posits[code][0] -= odrqty
             else:
                 self.posits[code][0] += odrqty
-            self.on_error(self, e)
+            self.on_error(self, e, None)
 
     async def _async_order_cancel(
         self,
@@ -360,12 +362,14 @@ class KisKrStkOMS(ForceAsyncNew):
                 pass
             else:  # order rejected
                 self.orders_pending.pop(odrno, None)
-                self.on_error(self, Exception(f"Order rejected: {resp_json}"))
+                self.on_error(
+                    self, Exception(f"Order rejected: {resp_json}"), resp_json
+                )
 
             self.on_order_cancel(self, resp_json)
         except Exception as e:
             self.orders_pending.pop(odrno, None)
-            self.on_error(self, e)
+            self.on_error(self, e, None)
 
     def _handle_order_executed(
         self,
@@ -456,6 +460,7 @@ class KisKrStkOMS(ForceAsyncNew):
                         ErrOrderNotFound(
                             f"Pending cancel order not found for exgId[{oexgId}]"
                         ),
+                        None,
                     )
                     return
                 odrprc = odr.prc
@@ -465,7 +470,7 @@ class KisKrStkOMS(ForceAsyncNew):
                 if err is None:
                     self.on_order_executed(self, code, "C", exeqty, odrprc, exgcode)
                 else:
-                    self.on_error(self, err)
+                    self.on_error(self, err, None)
             elif msg[5] == b"1":  # Adjust message
                 pass
             else:  # execution message
@@ -476,7 +481,7 @@ class KisKrStkOMS(ForceAsyncNew):
                 if err is None:
                     self.on_order_executed(self, code, odrside, exeqty, exeprc, exgcode)
                 else:
-                    self.on_error(self, err)
+                    self.on_error(self, err, None)
 
         ws_client._callbacks[WsKrStkExecAlert.TrId.encode()] = (
             WsKrStkExecAlert.TrLength,
@@ -505,7 +510,7 @@ class KisKrStkOMS(ForceAsyncNew):
                 raise Exception(resp_json)
             self.cash[1] = float(resp_json["output"]["stck_cash_ord_psbl_amt"])
         except Exception as e:
-            self.on_error(self, e)
+            self.on_error(self, e, None)
 
     async def update_posits(self):
         """현재 잔고를 조회하여 self.posits를 업데이트합니다."""
@@ -537,7 +542,7 @@ class KisKrStkOMS(ForceAsyncNew):
                 if ctx_area_nk100.strip() == "":
                     break
         except Exception as e:
-            self.on_error(self, e)
+            self.on_error(self, e, None)
         req_header["tr_id"] = b"TTTC0084R"
         try:
             ctx_area_fk100 = ""
@@ -568,7 +573,7 @@ class KisKrStkOMS(ForceAsyncNew):
                 if ctx_area_nk100.strip() == "":
                     break
         except Exception as e:
-            self.on_error(self, e)
+            self.on_error(self, e, None)
 
     def get_cash(self) -> list[float]:
         """[pending_cash, active_cash]를 반환합니다.
@@ -691,6 +696,7 @@ class KisKrStkOMS(ForceAsyncNew):
                     ErrInsufficientCash(
                         f"code:{code}, cash: {pending_cash + active_cash} < 0"
                     ),
+                    None,
                 )
                 return
         else:
@@ -701,6 +707,7 @@ class KisKrStkOMS(ForceAsyncNew):
                     ErrInsufficientPosition(
                         f"code:{code}, pos: {pending_pos + active_pos} < 0"
                     ),
+                    None,
                 )
                 return
         self.cash[0] = pending_cash
@@ -709,7 +716,7 @@ class KisKrStkOMS(ForceAsyncNew):
         try:
             self.http_client._api_limit_queue.get_nowait()
         except asyncio.QueueEmpty:
-            self.on_error(self, Exception("API rate limit exceeded"))
+            self.on_error(self, Exception("API rate limit exceeded"), None)
             return
 
         # Allocate pending order
@@ -748,7 +755,7 @@ class KisKrStkOMS(ForceAsyncNew):
         """
         oodr = self.orders_active.setdefault(code, {}).get(odrno, None)
         if oodr is None:
-            self.on_error(self, ErrOrderNotFound(f"Order[{odrno}] not found"))
+            self.on_error(self, ErrOrderNotFound(f"Order[{odrno}] not found"), None)
             return
 
         # If cancel is ongoing, return immediately to prevent duplicate cancel attempts.
@@ -758,7 +765,7 @@ class KisKrStkOMS(ForceAsyncNew):
         try:
             self.http_client._api_limit_queue.get_nowait()
         except asyncio.QueueEmpty:
-            self.on_error(self, Exception("API rate limit exceeded"))
+            self.on_error(self, Exception("API rate limit exceeded"), None)
             return
 
         # Allocate pending cancel,

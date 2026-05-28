@@ -39,6 +39,10 @@ class Macro:
         return coroutine(lambda: (yield))
 
     @staticmethod
+    def sleep(seconds: float):
+        time.sleep(seconds)
+
+    @staticmethod
     def timestamp_ms():
         return time.time_ns() // 1_000_000
 
@@ -85,7 +89,7 @@ class Macro:
 
     @staticmethod
     def nowutc_str() -> str:
-        return whenever.Instant.now().format("YYYY-MM-DD hh:mm:ss.fff")
+        return whenever.Instant.now().format("YYYY-MM-DD hh:mm:ss.ffffff")
 
     @staticmethod
     def nowtz_str(tz: str) -> str:
@@ -94,7 +98,7 @@ class Macro:
         Args:
             tz (str): The timezone to get the current datetime in. e.g.) "Asia/Seoul"
         """
-        return whenever.Instant.now().to_tz(tz).format("YYYY-MM-DD hh:mm:ss.fff")
+        return whenever.Instant.now().to_tz(tz).format("YYYY-MM-DD hh:mm:ss.ffffff")
 
 
 def run_system(main: Coroutine):
