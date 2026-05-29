@@ -8,7 +8,7 @@ from orjson import loads as orjson_loads
 
 from bknet.kis.client import KisHttpClient, KisWsClient
 from bknet.kis.tr_websocket import WsKrStkExecAlert
-from bknet.src import ForceAsyncNew, MaybeError, async_in_def
+from bknet.src import ForceAsyncNew, MaybeError, MemoryPool, async_in_def
 
 
 class KrOrderKind(StrEnum):
@@ -145,14 +145,36 @@ class ErrOrderNotFound(TradeError):
 
 @dataclass(slots=True)
 class KrStkOrder:
-    locId: str
-    exgId: str
-    code: str
-    side: Literal["B", "S", "A", "C"]  # 'B','S','A','C' (Buy, Sell, Adjust, Cancel)
-    kind: Union[str, KrOrderKind]
-    qty: int
-    prc: int
-    status: Literal["onwire", "onwait", "partial"]
+    locId: str = ""
+    exgId: str = ""
+    code: str = ""
+    side: Literal["", "B", "S", "A", "C"] = (
+        ""  # 'B','S','A','C' (Buy, Sell, Adjust, Cancel)
+    )
+    kind: Union[str, KrOrderKind] = ""
+    qty: int = 0
+    prc: int = 0
+    status: Literal["", "onwire", "onwait", "partial"] = ""
+
+    def set(
+        self,
+        locId: str,
+        exgId: str,
+        code: str,
+        side: Literal["B", "S", "A", "C"],
+        kind: Union[str, KrOrderKind],
+        qty: int,
+        prc: int,
+        status: Literal["onwire", "onwait", "partial"],
+    ) -> None:
+        self.locId = locId
+        self.exgId = exgId
+        self.code = code
+        self.side = side
+        self.kind = kind
+        self.qty = qty
+        self.prc = prc
+        self.status = status
 
 
 class KisKrStkOMS(ForceAsyncNew):
@@ -191,6 +213,7 @@ class KisKrStkOMS(ForceAsyncNew):
     "Share the same background task set with KisHttpClient to run background tasks such as order cash/cancel requests and periodic updates."
     _loop: asyncio.AbstractEventLoop
     _locId: int
+    _mempool: MemoryPool[KrStkOrder]
 
     @classmethod
     async def New(
@@ -208,6 +231,7 @@ class KisKrStkOMS(ForceAsyncNew):
         ],
         on_error: Callable[[Self, Exception, Optional[Dict]], None],
         timeout: float = 1.0,
+        mempool_size: int = 128,
     ) -> Self:
         """KIS 국내주식 실시간 주문/체결 관리
 
@@ -222,6 +246,7 @@ class KisKrStkOMS(ForceAsyncNew):
             on_order_executed (Callable[[KisKrStkOMS, str, Literal["B", "S"], int, int, str], None]): 주문 체결 결과 콜백, on_order_executed(self, code, odrside, exeqty, exeprc, exgcode)
             on_error (Callable[[KisKrStkOMS, Exception, Optional[Dict]], None]): 에러 콜백, on_error(self, Exception, Optional[Dict])
             timeout (float): HTTP 요청 타임아웃, default 1.0
+            mempool_size (int): 메모리 풀 크기, default 128
 
         Note:
         - ws_clinet에 자동으로 WsKrStkExecAlert 등록, 체결 메시지 수신 시 on_order_executed 호출.
@@ -266,6 +291,8 @@ class KisKrStkOMS(ForceAsyncNew):
         instance.bg_tasks = http_client.bg_tasks
         instance._loop = asyncio.get_running_loop()
         instance._locId = 0
+
+        instance._mempool = MemoryPool(KrStkOrder, mempool_size)
 
         # Bind WsKrStkExecAlert handler to ws_client
         instance.bind_ws_client(ws_client, hts_id)
@@ -323,6 +350,7 @@ class KisKrStkOMS(ForceAsyncNew):
                 self.orders_active.setdefault(code, {})[exgId] = pending_odr
                 self._handle_orphan_orders(exgId, code, odrside)
             else:  # order rejected
+                self._mempool.free(pending_odr)
                 if odrside == "B":
                     self.cash[0] += odrqty * odrprc
                     self.posits[code][0] -= odrqty
@@ -334,6 +362,9 @@ class KisKrStkOMS(ForceAsyncNew):
 
             self.on_order_cash(self, resp_json)
         except Exception as e:
+            pending_odr = self.orders_pending.pop(locId, None)
+            if pending_odr is not None:
+                self._mempool.free(pending_odr)
             self.orders_pending.pop(locId, None)
             if odrside == "B":
                 self.cash[0] += odrqty * odrprc
@@ -358,17 +389,20 @@ class KisKrStkOMS(ForceAsyncNew):
             )
             resp_json: dict = orjson_loads(resp.content)
             rt_cd = resp_json.get("rt_cd", "")
-            if rt_cd == "0":  # B/S order accepted
+            if rt_cd == "0":  # Cancel order accepted
                 pass
             else:  # order rejected
-                self.orders_pending.pop(odrno, None)
+                pending_odr = self.orders_pending.pop(odrno, None)
+                if pending_odr is not None:
+                    self._mempool.free(pending_odr)
                 self.on_error(
                     self, Exception(f"Order rejected: {resp_json}"), resp_json
                 )
-
             self.on_order_cancel(self, resp_json)
         except Exception as e:
-            self.orders_pending.pop(odrno, None)
+            pending_odr = self.orders_pending.pop(odrno, None)
+            if pending_odr is not None:
+                self._mempool.free(pending_odr)
             self.on_error(self, e, None)
 
     def _handle_order_executed(
@@ -401,10 +435,11 @@ class KisKrStkOMS(ForceAsyncNew):
             posits = self.posits[code]
             posits[0] += exeqty
             posits[1] -= exeqty
-            self.cash[1] += exeqty * exeprc
+            self.cash[1] += exeqty * exeprc * 0.998  # 매도대금 재사용비율?
         active_odr.qty -= exeqty
         if active_odr.qty == 0:
             del self.orders_active[code][exgId]
+            self._mempool.free(active_odr)
         else:
             active_odr.status = "partial"
 
@@ -434,6 +469,7 @@ class KisKrStkOMS(ForceAsyncNew):
         active_odr.qty -= exeqty
         if active_odr.qty == 0:
             del self.orders_active[code][exgId]
+            self._mempool.free(active_odr)
         else:
             active_odr.status = "partial"
 
@@ -464,6 +500,7 @@ class KisKrStkOMS(ForceAsyncNew):
                     )
                     return
                 odrprc = odr.prc
+                self._mempool.free(odr)
                 err = self._handle_order_cancelled(
                     code, odrside, exeqty, odrprc, oexgId
                 )
@@ -685,12 +722,19 @@ class KisKrStkOMS(ForceAsyncNew):
             odrprc: 주문 가격
             exgcode: 거래소 ['KRX', 'NXT', 'SOR'], default 'KRX'
         """
+        try:
+            self.http_client._api_limit_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            self.on_error(self, Exception("API rate limit exceeded"), None)
+            return
+
         pending_cash, active_cash = self.cash
         pending_pos, active_pos = self.posits.setdefault(code, [0, 0])
         if odrside == "B":
             pending_cash -= odrqty * odrprc
             pending_pos += odrqty
             if (pending_cash + active_cash) < 0:
+                self.http_client._api_limit_queue.put_nowait(None)  # API token rollback
                 self.on_error(
                     self,
                     ErrInsufficientCash(
@@ -702,6 +746,7 @@ class KisKrStkOMS(ForceAsyncNew):
         else:
             pending_pos -= odrqty
             if (pending_pos + active_pos) < 0:
+                self.http_client._api_limit_queue.put_nowait(None)  # API token rollback
                 self.on_error(
                     self,
                     ErrInsufficientPosition(
@@ -713,17 +758,11 @@ class KisKrStkOMS(ForceAsyncNew):
         self.cash[0] = pending_cash
         self.posits[code][0] = pending_pos
 
-        try:
-            self.http_client._api_limit_queue.get_nowait()
-        except asyncio.QueueEmpty:
-            self.on_error(self, Exception("API rate limit exceeded"), None)
-            return
-
         # Allocate pending order
         locId = self._get_locId()
-        self.orders_pending[locId] = KrStkOrder(
-            locId, "", code, odrside, odrkind, odrqty, odrprc, "onwire"
-        )
+        odr = self._mempool.alloc()
+        odr.set(locId, "", code, odrside, odrkind, odrqty, odrprc, "onwire")
+        self.orders_pending[locId] = odr
 
         task = self._loop.create_task(
             self._async_order_cash(
@@ -771,9 +810,9 @@ class KisKrStkOMS(ForceAsyncNew):
         # Allocate pending cancel,
         locId = self._get_locId()
         # Cancel orders are special, key for orders_pending is not locId, but the original order number(odrno)
-        self.orders_pending[odrno] = KrStkOrder(
-            locId, "", code, "C", "00", odrqty, oodr.prc, "onwire"
-        )
+        odr = self._mempool.alloc()
+        odr.set(locId, "", code, "C", "00", odrqty, oodr.prc, "onwire")
+        self.orders_pending[odrno] = odr
 
         task = self._loop.create_task(
             self._async_order_cancel(odrno, odrqty, allqty, exgcode),
