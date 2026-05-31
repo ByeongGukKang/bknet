@@ -6,27 +6,14 @@ from collections import deque
 from dataclasses import dataclass, field
 from inspect import iscoroutinefunction
 from types import coroutine
-from typing import (
-    Callable,
-    Coroutine,
-    Dict,
-    Generic,
-    Optional,
-    Self,
-    TypeAlias,
-    TypeVar,
-    Union,
-)
+from typing import Callable, Coroutine, Dict, Generic, Optional, Self, TypeVar
 
 import whenever
 from gufo.http import RequestMethod, Response
 from gufo.http.async_client import HttpClient as gufoHttpClient
 from picows import WSFrame, WSListener, WSMsgType, WSTransport, ws_connect
 
-### Types
 T = TypeVar("T")
-# Error returnable type
-MaybeError: TypeAlias = Union[None, Exception]
 
 
 ### Macros

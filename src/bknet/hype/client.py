@@ -111,6 +111,35 @@ class HypeHttpClient(HttpWrapper, ForceAsyncNew):
             headers if (headers is not None) else self.client.headers,
         )
 
+    async def request_unsafe(
+        self,
+        method: RequestMethod,
+        params: Optional[str] = None,
+        body: Optional[bytes] = None,
+        headers: Optional[Dict[str, bytes]] = None,
+    ) -> Response:
+        """unsafe, Make an authenticated request to the Hyperliquid API.
+
+        Args:
+            method: HTTP method for the request (e.g., GET, POST).
+            params: URL parameters to append to the base URL. Optional.
+            body: Request body as bytes. Optional.
+            headers: Additional headers to include in the request. Optional.
+
+        Returns:
+            Response object from the HTTP request.
+
+        Note:
+            This method does not respect the API rate limit and should be used with caution.
+            It bypasses weight-checking and avoids any Task/Future allocation, maximizing performance.
+        """
+        return await self.client.request(
+            method,
+            f"{self.url}{params}" if (params is not None) else self.url,
+            body,
+            headers if (headers is not None) else self.client.headers,
+        )
+
 
 class HypeWsClient(WebsocketWrapper):
     """Websocket client for Hyperliquid websocket API.
