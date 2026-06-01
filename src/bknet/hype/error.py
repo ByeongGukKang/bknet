@@ -49,3 +49,8 @@ class HypeErrNotEnoughMargin(Error[SomethingNotEnough]):
 class HypeErrNotEnoughPosition(Error[SomethingNotEnough]):
     code = "HypeErrNotEnoughPosition"
     msg = "[Hype] Not enough position"
+
+
+class HypeErrorTinyOrder(Error[SomethingNotEnough]):
+    code = "HypeErrorTinyOrder"
+    msg = "[Hype] Tiny order"

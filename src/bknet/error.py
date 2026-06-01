@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Generic, Optional, TypeAlias, TypedDict, TypeVar, Union
+from typing import Generic, Optional, TypedDict, TypeVar
 
 T = TypeVar("T")
 
@@ -16,9 +16,6 @@ class Error(Generic[T]):
 
     def __repr__(self) -> str:
         return self.__str__()
-
-
-MaybeError: TypeAlias = Union[None, T]
 
 
 class SomethingNotEnough(TypedDict):

@@ -19,18 +19,19 @@ from gufo.http import RequestMethod
 from orjson import loads as orjson_loads
 from ormsgpack import packb as ormsgpack_packb
 
-from bknet.error import Error, MaybeError
+from bknet.error import Error
 from bknet.hype.client import HypeHttpClient, HypeWsClient
 from bknet.hype.error import (
     HypeErrApiLimit,
     HypeErrNotEnoughMargin,
     HypeErrOrderFailed,
-    HypeErrOrderNotFund,
+    # HypeErrOrderNotFund,
     HypeErrOrderRejected,
-    HypeErrOrphanOrderExecuted,
+    # HypeErrOrphanOrderExecuted,
+    HypeErrorTinyOrder,
     HypeErrPython,
 )
-from bknet.hype.tr_rest import HypeRestInfo
+from bknet.hype.tr_rest import HypeRestInfoPerp
 from bknet.src import ForceAsyncNew, Macro, MemoryPool, async_in_def
 
 
@@ -166,11 +167,15 @@ class HypeOrder:
         self.status = "wire"
 
 
-class HypeOMS(ForceAsyncNew):
-    """Order management system for Hyperliquid exchange.
+class HypePerpOMS(ForceAsyncNew):
+    """Order management system for Hyperliquid exchange (perpetual).
 
     use .New() to create an instance of this class.
     """
+
+    user_address: str
+    # private_key: str
+    dex_list: List[str]
 
     http_client: HypeHttpClient
     on_error: Callable[[Self, Error], None]
@@ -211,29 +216,32 @@ class HypeOMS(ForceAsyncNew):
     @classmethod
     async def New(
         cls,
+        user_address: str,
         private_key: str,
+        dex_list: List[str],
         http_client: HypeHttpClient,
         ws_client: HypeWsClient,
         on_error: Callable[[Self, Error], None],
-        dex_list: Optional[List[str]] = None,
         mempool_size: int = 128,
         is_mainnet: bool = True,
     ) -> Self:
         """Create a new instance of HypeOMS.
 
         Args:
+
+            user_address: (main/sub account) Wallet address
+            private_key: (main/agent wallet) Private key
+            dex_list: list of HIP-3 dex names to trade (e.g., ['', 'xyz', 'flx']). Empty string '' corresponds to the default dex.
             http_client: HypeHttpClient instance to use for REST API calls
             ws_client: HypeWsClient instance to use for WebSocket API calls
-            dex_list: list of HIP-3 dex names to trade (e.g., ['xyz', 'flx']). If None, all dexs will be included.
-
-        Note:
-            - empty string '' in dex_list corresponds to the default dex.
-
-        urls:
-            - Asset ID: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/asset-ids
-
+            on_error: callback function to handle errors
+            mempool_size: size of the mempool to use for order placement
+            is_mainnet: whether to use the mainnet or testnet API
         """
         instance = cls(cls._prevented)
+        instance.user_address = user_address
+        instance.dex_list = dex_list
+
         instance.http_client = http_client
 
         instance.orders_pending = {}
@@ -271,10 +279,9 @@ class HypeOMS(ForceAsyncNew):
         )
         instance._crypt_source_hash = _local_keccak(b"a" if is_mainnet else b"b")
 
-        # Initialize memory pool for orders
+        ### Memory Buffers
+        # memory pool for orders
         instance._mempool = MemoryPool(HypeOrder, mempool_size)
-
-        # Initialize single action buffers
         instance._membuf_order_place = {
             "type": "order",
             "orders": [
@@ -288,39 +295,16 @@ class HypeOMS(ForceAsyncNew):
                 }
             ],
             "grouping": "na",
-        }
+        }  # single action buffers
 
-        ###  Initialize coin info table
+        # Coin info table
         instance.map_coin_info = {}
+        await instance.update_coin_info(dex_list)
 
-        # Native Perpetuals have aid = meta_index
-        if (dex_list is None) or ("" in dex_list):
-            meta_result = await HypeRestInfo.meta(http_client, "")
-            for universe_info in meta_result[0].values():
-                instance.map_coin_info[universe_info["name"]] = HypeCoinInfo(
-                    asset_id=universe_info["dev_meta_index"],
-                    szDecimals=universe_info["szDecimals"],
-                    maxLeverage=universe_info["maxLeverage"],
-                )
-
-        perpDexs = await HypeRestInfo.perpDexs(http_client)
-        if dex_list is not None:
-            perpDexs = {dex: info for dex, info in perpDexs.items() if dex in dex_list}
-
-        tasks = [HypeRestInfo.meta(http_client, name) for name in perpDexs.keys()]
-        meta_results = await asyncio.gather(*tasks)
-
-        for idx, dex_name in enumerate(perpDexs.keys()):
-            dex_info = perpDexs[dex_name]
-            perp_dex_index = dex_info["dev_dex_index"]
-            for universe_info in meta_results[idx][0].values():
-                meta_coin_index = universe_info["dev_meta_index"]
-                # Perpetuals on HIP-3 dexs have aid = 100000 + (dex_index * 10000) + meta_index
-                instance.map_coin_info[universe_info["name"]] = HypeCoinInfo(
-                    asset_id=100000 + (perp_dex_index * 10000) + meta_coin_index,
-                    szDecimals=universe_info["szDecimals"],
-                    maxLeverage=universe_info["maxLeverage"],
-                )
+        # Balance
+        instance.margin = [0.0, 0.0]
+        instance.posits = {}
+        await instance.update_balance(user_address, dex_list)
 
         return instance
 
@@ -366,6 +350,7 @@ class HypeOMS(ForceAsyncNew):
     ):
         # get coin info
         coin_info = self.map_coin_info[coin]
+        # use .get(coin, None) with if coin_info is None: return HypeErrCoinNotFound ???
 
         # format side, price and size
         isbuy_str = "true" if isbuy else "false"
@@ -440,8 +425,7 @@ class HypeOMS(ForceAsyncNew):
                 headers=self._headers,
             )
             pedodr: HypeOrder = self.orders_pending.pop(omsid, None)  # type: ignore
-            # NEVER FAIL, order_place is called with a valid omsid
-            # assert(pedodr is not None)
+            # NEVER FAIL, order_place is called with a valid omsid, assert(pedodr is not None)
             resp_json = orjson_loads(resp.content)
             status: Dict = (
                 resp_json.get("response", {}).get("data", {}).get("statuses", [{}])[0]
@@ -495,6 +479,62 @@ class HypeOMS(ForceAsyncNew):
     async def _async_order_modify_multiple(self, orders: List[HypeOrderModify]):
         pass
 
+    def bind_ws_client(self, ws_client: HypeWsClient):
+        def _handle(_: HypeWsClient, msg):
+            pass
+
+        ws_client._callbacks["asdf"] = _handle
+        ws_client.subscribe
+
+    async def update_coin_info(self, dex_list: List[str]):
+        """Update the coin info table with the latest coin information from the Hyperliquid API.
+
+        Args:
+            dex_list: list of HIP-3 dex names to trade (e.g., ['xyz', 'flx']). If None, all dexs will be included.
+        """
+        # Native Perpetuals have aid = meta_index
+        if "" in dex_list:
+            meta_result = await HypeRestInfoPerp.meta(self.http_client, "")
+            for universe_info in meta_result[0].values():
+                self.map_coin_info[universe_info["name"]] = HypeCoinInfo(
+                    asset_id=universe_info["dev_meta_index"],
+                    szDecimals=universe_info["szDecimals"],
+                    maxLeverage=universe_info["maxLeverage"],
+                )
+
+        perpDexs = await HypeRestInfoPerp.perpDexs(self.http_client)
+        perpDexs = {dex: info for dex, info in perpDexs.items() if dex in dex_list}
+
+        tasks = [
+            HypeRestInfoPerp.meta(self.http_client, name) for name in perpDexs.keys()
+        ]
+        meta_results = await asyncio.gather(*tasks)
+
+        for idx, dex_name in enumerate(perpDexs.keys()):
+            dex_info = perpDexs[dex_name]
+            perp_dex_index = dex_info["dev_dex_index"]
+            for universe_info in meta_results[idx][0].values():
+                meta_coin_index = universe_info["dev_meta_index"]
+                # Perpetuals on HIP-3 dexs have aid = 100000 + (dex_index * 10000) + meta_index
+                self.map_coin_info[universe_info["name"]] = HypeCoinInfo(
+                    asset_id=100000 + (perp_dex_index * 10000) + meta_coin_index,
+                    szDecimals=universe_info["szDecimals"],
+                    maxLeverage=universe_info["maxLeverage"],
+                )
+
+    async def update_balance(self, user_address: str, dex_list: List[str]):
+        resp = None
+        for dex_name in dex_list:
+            resp = await HypeRestInfoPerp.clearinghouseState(
+                self.http_client, user_address, dex_name
+            )
+            for v in resp["assetPositions"]:
+                position = v["position"]
+                posit = self.posits.setdefault(position["coin"], [0.0, 0.0])
+                posit[1] = float(position["szi"])
+        if resp is not None:
+            self.margin[1] = float(resp["marginSummary"]["totalRawUsd"])
+
     def order_place(
         self,
         coin: str,
@@ -507,7 +547,7 @@ class HypeOMS(ForceAsyncNew):
         grouping: Literal["na", "normalTpsl", "positionTpsl"] = "na",
         # vaultAddress: Optional[str] = None,
         # expiresAfter: Optional[int] = None,
-    ) -> MaybeError[HypeErrApiLimit]:
+    ) -> Optional[HypeErrApiLimit | HypeErrorTinyOrder | HypeErrNotEnoughMargin]:
         """Order a new limit order on the Hyperliquid exchange.
 
         Args:
@@ -517,11 +557,8 @@ class HypeOMS(ForceAsyncNew):
             size (float): The size of the order.
             reduceOnly (bool): Whether the order is reduce-only.
             odrtype (Literal["Alo", "Ioc", "Gtc"]): The order type.
-            cloid (Optional[str]): The client order ID.
-            grouping (Literal["na", "normalTpsl", "positionTpsl"]): The order grouping.
-
-        Notes:
-            If cloid == "", auto-generated omsid is used as cloid.
+            cloid (Optional[str]): The client order ID. If empty string '', auto-generated omsid is used as cloid.
+            grouping (Literal["na", "normalTpsl", "positionTpsl"]): The order grouping. Defaults to "na".
         """
         # check API limit
         if self.http_client._api_limit_weight >= 1:
@@ -533,21 +570,19 @@ class HypeOMS(ForceAsyncNew):
         pedmgr, actmrg = self.margin
         pedpos, _ = self.posits.setdefault(coin, [0, 0])
 
-        pedmgr -= price * (size if isbuy else -size)
+        delta_mgr = price * (size if isbuy else -size)
+        if (not reduceOnly) and (delta_mgr < 10):
+            self.http_client._api_limit_weight += 1  # API token rollback
+            return HypeErrorTinyOrder(  # Minimum order size is 10 USDC
+                {"action": "order_place", "current": delta_mgr, "required": 10.0}
+            )
+        pedmgr -= delta_mgr
         pedpos += size
         if (pedmgr + actmrg) < 0:
             self.http_client._api_limit_weight += 1  # API token rollback
-            self.on_error(
-                self,
-                HypeErrNotEnoughMargin(
-                    {
-                        "action": "order_place",
-                        "current": actmrg,
-                        "required": price * (size if isbuy else -size),
-                    }
-                ),
+            return HypeErrNotEnoughMargin(
+                {"action": "order_place", "current": actmrg, "required": delta_mgr}
             )
-            return
         # update pending margin and position
         self.margin[0] = pedmgr
         self.posits[coin][0] = pedpos

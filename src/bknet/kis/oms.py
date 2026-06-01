@@ -1,12 +1,12 @@
 import asyncio
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Callable, Iterable, Literal, Self, Union
+from typing import Callable, Iterable, Literal, Optional, Self, Union
 
 from gufo.http import RequestMethod
 from orjson import loads as orjson_loads
 
-from bknet.error import Error, MaybeError
+from bknet.error import Error
 from bknet.kis.client import KisHttpClient, KisWsClient
 from bknet.kis.error import (
     KisErrApiLimit,
@@ -415,7 +415,7 @@ class KisKrStkOMS(ForceAsyncNew):
         exeprc: int,
         exgId: str,
         exgcode: str,
-    ) -> MaybeError[KisErrOrphanOrderExecuted]:
+    ) -> Optional[KisErrOrphanOrderExecuted]:
         active_odr = self.orders_active.setdefault(code, {}).get(exgId, None)
         if (
             active_odr is None
@@ -454,7 +454,7 @@ class KisKrStkOMS(ForceAsyncNew):
         exeqty: int,
         odrprc: int,
         exgId: str,
-    ) -> MaybeError[KisErrOrderNotFund]:
+    ) -> Optional[KisErrOrderNotFund]:
         active_odr = self.orders_active.setdefault(code, {}).get(exgId, None)
         if active_odr is None:
             return KisErrOrderNotFund(exgId)

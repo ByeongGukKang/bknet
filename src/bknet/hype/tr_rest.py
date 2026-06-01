@@ -24,15 +24,15 @@ class HypeInfoUniverse(TypedDict):
     dev_meta_index: int
 
 
-class HypeInfoMarginTier(TypedDict):
-    lowerBound: str
-    maxLeverage: int
-
-
 class HypeInfoMarginTable(TypedDict):
     # Hyperliquid API fields
     description: str
-    marginTiers: List[HypeInfoMarginTier]
+
+    class _marginTier(TypedDict):  # type: ignore
+        lowerBound: str
+        maxLeverage: int
+
+    marginTiers: List[_marginTier]
 
 
 class HypeInfoPerpDexs(TypedDict):
@@ -55,7 +55,51 @@ class HypeInfoPerpDexs(TypedDict):
     dev_dex_index: int
 
 
-class HypeRestInfo:
+class HypeInfoClearingHouseState(TypedDict):
+    class _AssetPosition(TypedDict):  # type: ignore
+        class _Position(TypedDict):  # type: ignore
+            class _CumFunding(TypedDict):  # type: ignore
+                allTime: str
+                sinceChange: str
+                sinceOpen: str
+
+            coin: str
+            cumFunding: _CumFunding
+            entryPrx: str
+
+            class _Leverage(TypedDict):  # type: ignore
+                rawUsd: str
+                type: Literal["cross", "isolated"]
+                value: int
+
+            leverage: _Leverage
+            liquidationPx: str
+            marginUsed: str
+            maxLeverage: int
+            positionValue: str
+            returnOnEquity: str
+            szi: str
+            unrealizedPnl: str
+
+        position: _Position
+        type: Literal["oneway"]
+
+    assetPositions: List[_AssetPosition]
+    crossMaintenanceMarginUsed: str
+
+    class _marginSummary(TypedDict):  # type: ignore
+        accountValue: str
+        totalMarginUsed: str
+        totalNtlPos: str
+        totalRawUsd: str
+
+    crossMarginSummary: _marginSummary
+    marginSummary: _marginSummary
+    time: int
+    withdrawable: str
+
+
+class HypeRestInfoPerp:
     @staticmethod
     async def perpDexs(http_client: HypeHttpClient) -> Dict[str, HypeInfoPerpDexs]:
         """Get perpetual dex information"""
@@ -98,3 +142,16 @@ class HypeRestInfo:
         for table_index, v in margin_tables:
             result_margin_tables[table_index] = v
         return result_universe, result_margin_tables
+
+    @staticmethod
+    async def clearinghouseState(
+        http_client: HypeHttpClient, address: str, dex: str = ""
+    ) -> HypeInfoClearingHouseState:
+        resp = await http_client.request(
+            20,
+            RequestMethod.POST,  # type: ignore
+            params="/info",
+            body=f'{{"type":"clearinghouseState","user":"{address}","dex":"{dex}"}}'.encode(),
+        )
+        resp_json: HypeInfoClearingHouseState = orjson_loads(resp.content)
+        return resp_json

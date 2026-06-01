@@ -1,17 +1,44 @@
 import asyncio
 
 from bknet.hype.client import HypeWsClient
-from bknet.src import run_system
+from bknet.hype.tr_websocket import HypeWsl2Book, HypeWsTrades
+from bknet.src import Macro, run_system
+
+NOWSTR = lambda: Macro.nowtz_str("Asia/Seoul")  # noqa
 
 
 async def main():
 
+    def on_frame_l2Book(self: HypeWsClient, msg):  # type: ignore
+        # msg: HypeWsBook = msg
+        bids, asks = msg["levels"]
+        bid_px = ",".join([bid["px"] for bid in bids])
+        ask_px = ",".join([ask["px"] for ask in asks])
+        bid_sz = ",".join([bid["sz"] for bid in bids])
+        ask_sz = ",".join([ask["sz"] for ask in asks])
+        bid_n = ",".join([str(bid["n"]) for bid in bids])
+        ask_n = ",".join([str(ask["n"]) for ask in asks])
+        print(
+            f"{msg['time']},{NOWSTR()},{msg['coin']}"
+            f",{ask_px},{bid_px},{ask_sz},{bid_sz},{ask_n},{bid_n}"
+        )
+
+    def on_frame_trade(self: HypeWsClient, msg):  # type: ignore
+        msg: list[HypeWsTrades] = msg
+        for trd in msg:
+            print(trd["time"], trd["coin"], trd["side"], trd["px"], trd["sz"])
+        print()
+
     wsClient = await HypeWsClient.New(
         on_connected=lambda self: print("Websocket connected"),
         on_disconnected=lambda self: print("Websocket disconnected"),
-        on_frame={"l2Book": lambda self, msg: print(msg)},
+        on_frame={
+            "l2Book": on_frame_l2Book,
+            "trades": on_frame_trade,
+        },
     )
-    wsClient.subscribe('{"type":"l2Book","coin":"xyz:SP500"}')
+    wsClient.subscribe('{"type":"l2Book","coin":"xyz:SMSN"}')
+    # wsClient.subscribe('{"type":"trades","coin":"xyz:SP500"}')
     while True:
         await asyncio.sleep(1)
 
