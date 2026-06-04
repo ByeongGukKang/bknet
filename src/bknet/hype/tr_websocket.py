@@ -71,7 +71,7 @@ class HypeWsTwapStates(TypedDict):
     "TWAP states array Tuple[TWAP id, TWAP state] for all active TWAP orders"
 
 
-class HypeClearinghouseState(TypedDict):
+class HypeWsClearinghouseState(TypedDict):
     dex: str
     "exchange identifier string"
     user: str
@@ -135,7 +135,7 @@ class HypeClearinghouseState(TypedDict):
     "clearing house state"
 
 
-class HypeOpenOrders(TypedDict):
+class HypeWsOpenOrders(TypedDict):
     dex: str
     "exchange identifier string"
     user: str
@@ -159,7 +159,7 @@ class HypeOpenOrders(TypedDict):
     "orders currently live in the book"
 
 
-class HypeCandle(TypedDict):
+class HypeWsCandle(TypedDict):
     t: int
     "open time in unix milliseconds"
     T: int
@@ -182,7 +182,7 @@ class HypeCandle(TypedDict):
     "number of trades"
 
 
-class HypeWsl2Book(TypedDict):
+class HypeWsL2Book(TypedDict):
     coin: str
     "coin symbol (e.g., 'xyz:SP500')"
 

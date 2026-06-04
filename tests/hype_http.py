@@ -1,5 +1,5 @@
 from bknet.hype.client import HypeHttpClient
-from bknet.hype.tr_rest import HypeRestInfo
+from bknet.hype.tr_rest import HypeRestInfoPerp
 from bknet.src import run_system
 
 
@@ -7,7 +7,7 @@ async def main():
 
     httpClient = await HypeHttpClient.New()
 
-    resp = await HypeRestInfo.perpDexs(httpClient)
+    resp = await HypeRestInfoPerp.perpDexs(httpClient)
     print(resp)
 
 

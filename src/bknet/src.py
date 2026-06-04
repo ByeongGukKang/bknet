@@ -114,7 +114,7 @@ def run_system(main: Coroutine):
     asyncio.run(main)
 
 
-def async_in_def(
+def async_schedule(
     coro: Callable[..., Coroutine], bg_task_set: set[asyncio.Task], *args, **kwargs
 ):
     """Run a coroutine in the background and add it to the provided set of background tasks.
@@ -254,7 +254,7 @@ class WebsocketWrapper(ForceAsyncNew):
 
     def reconnect(self):
         "Reconnect to the websocket server"
-        async_in_def(self._reconnect, self.bg_tasks)
+        async_schedule(self._reconnect, self.bg_tasks)
 
     def send_byte(self, data: bytes):
         """Send binary data to the websocket server.

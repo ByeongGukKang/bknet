@@ -13,17 +13,17 @@ class HypeErrApiLimit(Error[None]):
     msg = "[Hype] API limit reached"
 
 
-class HypeErrOrphanOrderExecuted(Error[str]):
+class HypeErrOrphanFilled(Error[int]):
     code = "HypeErrOrphanOrderExecuted"
     msg = "[Hype] Orphan order executed"
-    data: str
+    data: int
     "order_id"
 
 
-class HypeErrOrderNotFund(Error[str]):
+class HypeErrOrderNotFund(Error[int]):
     code = "HypeErrOrderNotFund"
     msg = "[Hype] Order not found"
-    data: str
+    data: int
     "order_id"
 
 

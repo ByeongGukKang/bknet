@@ -9,6 +9,7 @@ from typing import (
     NotRequired,
     Optional,
     Self,
+    Tuple,
     TypedDict,
     Union,
 )
@@ -25,14 +26,15 @@ from bknet.hype.error import (
     HypeErrApiLimit,
     HypeErrNotEnoughMargin,
     HypeErrOrderFailed,
-    # HypeErrOrderNotFund,
+    HypeErrOrderNotFund,
     HypeErrOrderRejected,
-    # HypeErrOrphanOrderExecuted,
+    HypeErrOrphanFilled,
     HypeErrorTinyOrder,
     HypeErrPython,
 )
 from bknet.hype.tr_rest import HypeRestInfoPerp
-from bknet.src import ForceAsyncNew, Macro, MemoryPool, async_in_def
+from bknet.hype.tr_websocket import HypeWsOrderUpdates
+from bknet.src import ForceAsyncNew, Macro, MemoryPool, async_schedule
 
 
 class OrderTypeLimit(TypedDict):
@@ -79,14 +81,14 @@ class HypeOrderModify(TypedDict):
 
 
 # Type alias for cloid
-class HypeCloid(str):
+class HypeTyCloid(str):
     "Always valid 128 bit hex string"
 
-    def __new__(cls, cloid: Union[str, int]) -> "HypeCloid":
-        if type(cloid) is HypeCloid:
+    def __new__(cls, cloid: Union[str, int]) -> "HypeTyCloid":
+        if type(cloid) is HypeTyCloid:
             return cloid
         elif type(cloid) is int:
-            return HypeCloid(f"0x{cloid:032x}")
+            return HypeTyCloid(f"0x{cloid:032x}")
         elif type(cloid) is str:
             clean = cloid[2:] if cloid.startswith("0x") else cloid
             cl_len = len(clean)
@@ -94,19 +96,19 @@ class HypeCloid(str):
             if cl_len == 32:
                 try:
                     int(clean, 16)
-                    return HypeCloid(f"0x{clean.lower()}")
+                    return HypeTyCloid(f"0x{clean.lower()}")
                 except ValueError:
                     pass
 
             if cl_len < 32:
                 try:
                     int(clean, 16)
-                    return HypeCloid(f"0x{clean.lower():0>32}")
+                    return HypeTyCloid(f"0x{clean.lower():0>32}")
                 except ValueError:
                     pass
 
             hashed = md5(cloid.encode("utf-8")).hexdigest()
-            return HypeCloid(f"0x{hashed}")
+            return HypeTyCloid(f"0x{hashed}")
         else:
             raise TypeError(f"Invalid cloid type: {type(cloid)}")
 
@@ -139,13 +141,13 @@ class HypeCoinInfo:
 class HypeOrder:
     omsid: int = 0
     oid: int = 0
-    cloid: Optional[HypeCloid] = None
+    cloid: Optional[HypeTyCloid] = None
     coin: str = ""
     side: Literal["", "B", "S", "A", "C"] = ""
     kind: Literal["", "Alo", "Ioc", "Gtc"] = ""
     qty: float = 0.0
     prc: float = 0.0
-    status: Literal["", "wire", "wait", "partial"] = ""
+    status: Literal["", "onwire", "onwait", "partial"] = ""
 
     def init(
         self,
@@ -155,7 +157,7 @@ class HypeOrder:
         kind: Literal["Alo", "Ioc", "Gtc"],
         qty: float,
         prc: float,
-        cloid: Optional[HypeCloid] = None,
+        cloid: Optional[HypeTyCloid] = None,
     ) -> None:
         self.omsid = omsid
         self.cloid = cloid
@@ -164,7 +166,7 @@ class HypeOrder:
         self.kind = kind
         self.qty = qty
         self.prc = prc
-        self.status = "wire"
+        self.status = "onwire"
 
 
 class HypePerpOMS(ForceAsyncNew):
@@ -186,12 +188,12 @@ class HypePerpOMS(ForceAsyncNew):
     posits: Dict[str, list[float]]
     "coin: [pending_size, active_size]"
 
-    orders_pending: Dict[int, HypeOrder]
+    orders_onwire: Dict[int, HypeOrder]
     "omsid: HypeOrder"
-    orders_active: Dict[str, Dict[int, HypeOrder]]
+    orders_onwait: Dict[str, Dict[int, HypeOrder]]
     "coin: {oid: HypeOrder}"
-    orders_orphan: Dict[int, HypeOrder]
-    "oid: order"
+    orders_orphan_filled: Dict[int, List[Tuple[float, float]]]
+    "oid: [(filled_qty, filled_prc), ...]"
 
     bg_tasks: set[asyncio.Task]
     _loop: asyncio.AbstractEventLoop
@@ -244,9 +246,9 @@ class HypePerpOMS(ForceAsyncNew):
 
         instance.http_client = http_client
 
-        instance.orders_pending = {}
-        instance.orders_active = {}
-        instance.orders_orphan = {}  # executed message received before order accepted message
+        instance.orders_onwire = {}
+        instance.orders_onwait = {}
+        instance.orders_orphan_filled = {}  # executed message received before order accepted message
 
         instance.bg_tasks = http_client.bg_tasks
         instance._loop = asyncio.get_running_loop()
@@ -424,7 +426,7 @@ class HypePerpOMS(ForceAsyncNew):
                 ).encode("utf-8"),
                 headers=self._headers,
             )
-            pedodr: HypeOrder = self.orders_pending.pop(omsid, None)  # type: ignore
+            pedodr: HypeOrder = self.orders_onwire.pop(omsid, None)  # type: ignore
             # NEVER FAIL, order_place is called with a valid omsid, assert(pedodr is not None)
             resp_json = orjson_loads(resp.content)
             status: Dict = (
@@ -448,11 +450,11 @@ class HypePerpOMS(ForceAsyncNew):
                 return
             # success, update orders_active
             pedodr.oid = oid
-            pedodr.status = "wait"
-            self.orders_active.setdefault(coin, {})[oid] = pedodr
+            pedodr.status = "onwait"
+            self.orders_onwait.setdefault(coin, {})[oid] = pedodr
 
         except Exception as e:
-            pedodr = self.orders_pending.pop(omsid, None)  # type: ignore
+            pedodr = self.orders_onwire.pop(omsid, None)  # type: ignore
             if pedodr is not None:  # free memory
                 self._mempool.free(pedodr)
             # recover margin and position
@@ -479,12 +481,98 @@ class HypePerpOMS(ForceAsyncNew):
     async def _async_order_modify_multiple(self, orders: List[HypeOrderModify]):
         pass
 
-    def bind_ws_client(self, ws_client: HypeWsClient):
-        def _handle(_: HypeWsClient, msg):
-            pass
+    def _handle_order_filled(
+        self,
+        odr: HypeWsOrderUpdates._order,
+    ) -> Optional[HypeErrOrphanFilled]:
+        filled_coin = odr["coin"]
+        filled_oid = odr["oid"]
+        filled_qty = float(odr["sz"])
+        filled_prc = float(odr["limitPx"])
 
-        ws_client._callbacks["asdf"] = _handle
-        ws_client.subscribe
+        onwait_odr = self.orders_onwait.setdefault(filled_coin, {}).get(
+            filled_oid, None
+        )
+        if (
+            onwait_odr is None
+        ):  # orphan filled, filled msg received first than order placed
+            orphan_odr = self.orders_orphan_filled.get(filled_oid, None)
+            if orphan_odr is None:
+                self.orders_orphan_filled[filled_oid] = [(filled_qty, filled_prc)]
+            else:
+                orphan_odr.append((filled_qty, filled_prc))
+            return HypeErrOrphanFilled(filled_oid)
+
+        posits = self.posits[
+            filled_coin
+        ]  # assert No KeyError, posit is initialized when order is placed
+        actpos_before = abs(posits[1])
+
+        if odr["side"] == "B":
+            posits[0] -= filled_qty
+            posits[1] += filled_qty
+        else:
+            posits[0] += filled_qty
+            posits[1] -= filled_qty
+
+        margin = self.margin
+        if abs(posits[1]) < actpos_before:  # position reduced
+            # available margin increases when position is reduced
+            margin[1] += filled_qty * filled_prc
+        else:  # position increased
+            margin[0] += filled_qty * onwait_odr.prc
+            # available margin decreases when position is increased
+            margin[1] -= filled_qty * filled_prc
+        onwait_odr.qty -= filled_qty
+        if onwait_odr.qty == 0:
+            del self.orders_onwait[filled_coin][filled_oid]
+            self._mempool.free(onwait_odr)
+        else:
+            onwait_odr.status = "partial"
+
+        return None
+
+    def _handle_order_canceled(
+        self, odr: HypeWsOrderUpdates._order
+    ) -> Optional[HypeErrOrderNotFund]:
+        coin = odr["coin"]
+        oid = odr["oid"]
+        onwait_odr = self.orders_onwait.setdefault(coin, {}).get(oid, None)
+        if onwait_odr is None:
+            return HypeErrOrderNotFund(oid)
+
+        posits = self.posits[coin]
+        odrqty = onwait_odr.qty
+        posits[0] += odrqty if odr["side"] == "B" else -odrqty
+        self.margin[0] += odrqty * onwait_odr.prc
+
+        del self.orders_onwait[coin][oid]
+        self._mempool.free(onwait_odr)
+
+        return None
+
+    def bind_ws_client(self, ws_client: HypeWsClient):
+        def _handle_WsHypeOrderUpdates(_: HypeWsClient, msg: HypeWsOrderUpdates):
+            odr = msg["order"]
+            odr_status = msg["status"]
+            if odr_status == "filled":  # "filled"
+                self._handle_order_filled(odr)
+            # elif odr_status == "open": # "open"
+            #     pass
+            elif odr_status == "canceled":  # "canceled"
+                self._handle_order_canceled(odr)
+            elif odr_status == "rejected":  # "rejected"
+                pass
+            elif odr_status.endswith("Canceled"):  # "canceled" (e.g., "marginCanceled")
+                pass
+            elif odr_status.endswith("Rejected"):  # "rejected" (e.g., "tickRejected")
+                pass
+            else:
+                # TODO handle other statuses
+                pass
+
+        ws_client._callbacks["orderUpdates"] = _handle_WsHypeOrderUpdates  # type: ignore
+        ws_client.subscribe(f'{{"type":"orderUpdates","user":"{self.user_address}"}}')
 
     async def update_coin_info(self, dex_list: List[str]):
         """Update the coin info table with the latest coin information from the Hyperliquid API.
@@ -505,10 +593,9 @@ class HypePerpOMS(ForceAsyncNew):
         perpDexs = await HypeRestInfoPerp.perpDexs(self.http_client)
         perpDexs = {dex: info for dex, info in perpDexs.items() if dex in dex_list}
 
-        tasks = [
-            HypeRestInfoPerp.meta(self.http_client, name) for name in perpDexs.keys()
-        ]
-        meta_results = await asyncio.gather(*tasks)
+        meta_results = await asyncio.gather(
+            *[HypeRestInfoPerp.meta(self.http_client, name) for name in perpDexs.keys()]
+        )
 
         for idx, dex_name in enumerate(perpDexs.keys()):
             dex_info = perpDexs[dex_name]
@@ -543,7 +630,7 @@ class HypePerpOMS(ForceAsyncNew):
         size: float,
         reduceOnly: bool,
         odrtype: Literal["Alo", "Ioc", "Gtc"],
-        cloid: Optional[Union[HypeCloid, Literal[""]]] = None,
+        cloid: Optional[Union[HypeTyCloid, Literal[""]]] = None,
         grouping: Literal["na", "normalTpsl", "positionTpsl"] = "na",
         # vaultAddress: Optional[str] = None,
         # expiresAfter: Optional[int] = None,
@@ -567,32 +654,33 @@ class HypePerpOMS(ForceAsyncNew):
             return HypeErrApiLimit(None)
 
         # check margin and position
-        pedmgr, actmrg = self.margin
-        pedpos, _ = self.posits.setdefault(coin, [0, 0])
+        pedmrg, actmrg = self.margin
+        delta_mrg = price * size
+        pedmrg -= delta_mrg
 
-        delta_mgr = price * (size if isbuy else -size)
-        if (not reduceOnly) and (delta_mgr < 10):
+        if reduceOnly:
+            pass
+        elif delta_mrg < 10:
             self.http_client._api_limit_weight += 1  # API token rollback
             return HypeErrorTinyOrder(  # Minimum order size is 10 USDC
-                {"action": "order_place", "current": delta_mgr, "required": 10.0}
+                {"action": "order_place", "current": delta_mrg, "required": 10.0}
             )
-        pedmgr -= delta_mgr
-        pedpos += size
-        if (pedmgr + actmrg) < 0:
+        elif (pedmrg + actmrg) < 0:
             self.http_client._api_limit_weight += 1  # API token rollback
             return HypeErrNotEnoughMargin(
-                {"action": "order_place", "current": actmrg, "required": delta_mgr}
+                {"action": "order_place", "current": actmrg, "required": delta_mrg}
             )
-        # update pending margin and position
-        self.margin[0] = pedmgr
-        self.posits[coin][0] = pedpos
+
+        self.margin[0] = pedmrg
+        posits = self.posits.setdefault(coin, [0, 0])
+        posits[0] += size if isbuy else -size
 
         # Allocate pending order
         omsid = self._get_omsid()
         if cloid is None:
             pass
         elif cloid == "":  # cloid as omsid
-            cloid = HypeCloid(omsid)
+            cloid = HypeTyCloid(omsid)
 
         odr = self._mempool.alloc()
         odr.init(
@@ -604,10 +692,10 @@ class HypePerpOMS(ForceAsyncNew):
             prc=price,
             cloid=cloid,
         )
-        self.orders_pending[omsid] = odr
+        self.orders_onwire[omsid] = odr
 
         # async order place
-        async_in_def(
+        async_schedule(
             self._async_order_place,
             self.bg_tasks,
             omsid,

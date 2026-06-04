@@ -13,7 +13,7 @@ wheels/
 *.json
 
 # Personal codes
-any.ipynb
+test.py
 data_collect/
 research/
 _work/

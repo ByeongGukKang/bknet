@@ -18,7 +18,7 @@ from bknet.kis.error import (
     KisErrPython,
 )
 from bknet.kis.tr_websocket import WsKrStkExecAlert
-from bknet.src import ForceAsyncNew, MemoryPool, async_in_def
+from bknet.src import ForceAsyncNew, MemoryPool, async_schedule
 
 
 class KrOrderKind(StrEnum):
@@ -209,9 +209,9 @@ class KisKrStkOMS(ForceAsyncNew):
     _headers_buy: dict[str, bytes]
     _headers_sell: dict[str, bytes]
     _headers_cancel: dict[str, bytes]
-    orders_pending: dict[str, KrStkOrder]
+    orders_onwire: dict[str, KrStkOrder]
     "omsid -> KrStkOrder"
-    orders_active: dict[str, dict[str, KrStkOrder]]
+    orders_onwait: dict[str, dict[str, KrStkOrder]]
     "code -> exgId -> KrStkOrder"
     orders_orphan: dict[str, list[tuple[int, int, str]]]
     "exgId -> list[tuple[exeqty, exeprc, exgcode]]"
@@ -291,8 +291,8 @@ class KisKrStkOMS(ForceAsyncNew):
         instance._headers_cancel = base_headers.copy()
         instance._headers_cancel["tr_id"] = b"TTTC0013U"  # Adjust & Cancel
 
-        instance.orders_pending = {}
-        instance.orders_active = {}
+        instance.orders_onwire = {}
+        instance.orders_onwait = {}
         instance.orders_orphan = {}  # executed message received before order accepted message
 
         instance.bg_tasks = http_client.bg_tasks
@@ -345,7 +345,7 @@ class KisKrStkOMS(ForceAsyncNew):
                 headers=self._headers_buy if odrside == "B" else self._headers_sell,
             )
             # update order status
-            pending_odr = self.orders_pending.pop(omsid, None)
+            pending_odr = self.orders_onwire.pop(omsid, None)
             if pending_odr is None:
                 return
             resp_json: dict = orjson_loads(resp.content)
@@ -354,7 +354,7 @@ class KisKrStkOMS(ForceAsyncNew):
                 exgId = resp_json["output"]["ODNO"]
                 pending_odr.exgId = exgId
                 pending_odr.status = "onwait"
-                self.orders_active.setdefault(code, {})[exgId] = pending_odr
+                self.orders_onwait.setdefault(code, {})[exgId] = pending_odr
                 self._handle_orphan_orders(exgId, code, odrside)
             else:  # order rejected
                 self._mempool.free(pending_odr)
@@ -367,7 +367,7 @@ class KisKrStkOMS(ForceAsyncNew):
 
             self.on_order_cash(self, resp_json)
         except Exception as e:
-            pending_odr = self.orders_pending.pop(omsid, None)
+            pending_odr = self.orders_onwire.pop(omsid, None)
             if pending_odr is not None:
                 self._mempool.free(pending_odr)
             if odrside == "B":
@@ -396,13 +396,13 @@ class KisKrStkOMS(ForceAsyncNew):
             if rt_cd == "0":  # Cancel order accepted
                 pass
             else:  # order rejected
-                pending_odr = self.orders_pending.pop(odrno, None)
+                pending_odr = self.orders_onwire.pop(odrno, None)
                 if pending_odr is not None:
                     self._mempool.free(pending_odr)
                 self.on_error(self, KisErrOrderRejected(resp_json))
             self.on_order_cancel(self, resp_json)
         except Exception as e:
-            pending_odr = self.orders_pending.pop(odrno, None)
+            pending_odr = self.orders_onwire.pop(odrno, None)
             if pending_odr is not None:
                 self._mempool.free(pending_odr)
             self.on_error(self, KisErrPython(e))
@@ -416,9 +416,9 @@ class KisKrStkOMS(ForceAsyncNew):
         exgId: str,
         exgcode: str,
     ) -> Optional[KisErrOrphanOrderExecuted]:
-        active_odr = self.orders_active.setdefault(code, {}).get(exgId, None)
+        onwait_odr = self.orders_onwait.setdefault(code, {}).get(exgId, None)
         if (
-            active_odr is None
+            onwait_odr is None
         ):  # orphan execution, order accepted message is not received yet.
             orphan_odr = self.orders_orphan.get(exgId, None)
             if orphan_odr is None:
@@ -427,23 +427,22 @@ class KisKrStkOMS(ForceAsyncNew):
                 orphan_odr.append((exeqty, exeprc, exgcode))
             return KisErrOrphanOrderExecuted(exgId)
 
+        posits = self.posits[code]
         if odrside == "B":
-            posits = self.posits[code]
             posits[0] -= exeqty
             posits[1] += exeqty
-            self.cash[0] += exeqty * active_odr.prc  # refund pending cash
+            self.cash[0] += exeqty * onwait_odr.prc  # refund pending cash
             self.cash[1] -= exeqty * exeprc
-        elif odrside == "S":
-            posits = self.posits[code]
+        else:  # "S"
             posits[0] += exeqty
             posits[1] -= exeqty
             self.cash[1] += exeqty * exeprc * 0.998  # 매도대금 재사용비율?
-        active_odr.qty -= exeqty
-        if active_odr.qty == 0:
-            del self.orders_active[code][exgId]
-            self._mempool.free(active_odr)
+        onwait_odr.qty -= exeqty
+        if onwait_odr.qty == 0:
+            del self.orders_onwait[code][exgId]
+            self._mempool.free(onwait_odr)
         else:
-            active_odr.status = "partial"
+            onwait_odr.status = "partial"
 
         return None
 
@@ -455,23 +454,23 @@ class KisKrStkOMS(ForceAsyncNew):
         odrprc: int,
         exgId: str,
     ) -> Optional[KisErrOrderNotFund]:
-        active_odr = self.orders_active.setdefault(code, {}).get(exgId, None)
-        if active_odr is None:
+        onwait_odr = self.orders_onwait.setdefault(code, {}).get(exgId, None)
+        if onwait_odr is None:
             return KisErrOrderNotFund(exgId)
 
         posits = self.posits.setdefault(code, [0, 0])
         if odrside == "B":
             posits[0] -= exeqty
             self.cash[0] += exeqty * odrprc
-        elif odrside == "S":
+        else:
             posits[0] += exeqty
 
-        active_odr.qty -= exeqty
-        if active_odr.qty == 0:
-            del self.orders_active[code][exgId]
-            self._mempool.free(active_odr)
+        onwait_odr.qty -= exeqty
+        if onwait_odr.qty == 0:
+            del self.orders_onwait[code][exgId]
+            self._mempool.free(onwait_odr)
         else:
-            active_odr.status = "partial"
+            onwait_odr.status = "partial"
 
         return None
 
@@ -489,7 +488,7 @@ class KisKrStkOMS(ForceAsyncNew):
                 # Original order id
                 oexgId = msg[3].decode()
                 # remove pending cancel order
-                odr = self.orders_pending.pop(oexgId, None)
+                odr = self.orders_onwire.pop(oexgId, None)
                 if odr is None:
                     self.on_error(self, KisErrOrderNotFund(oexgId))
                     return
@@ -522,8 +521,8 @@ class KisKrStkOMS(ForceAsyncNew):
 
     def update_all(self):
         """현금 잔고와 모든 종목의 잔고를 조회하여 self.cash와 self.posits를 업데이트합니다."""
-        async_in_def(self.update_cash, self.bg_tasks)
-        async_in_def(self.update_posits, self.bg_tasks)
+        async_schedule(self.update_cash, self.bg_tasks)
+        async_schedule(self.update_posits, self.bg_tasks)
 
     async def update_cash(self):
         """현재 현금 잔고를 조회하여 self.cash를 업데이트합니다."""
@@ -637,7 +636,7 @@ class KisKrStkOMS(ForceAsyncNew):
             - 활성 주문: 접수되어 체결을 기다리는 주문
             - 값이 없는 경우 빈 tuple, 있는 경우 generator를 반환합니다. list가 필요한 경우 list()로 감싸서 사용하세요.
         """
-        active_orders = self.orders_active.get(code, {})
+        active_orders = self.orders_onwait.get(code, {})
         if not active_orders:
             return ()
         return (odr for odr in active_orders.values() if odr.side == "B")
@@ -652,7 +651,7 @@ class KisKrStkOMS(ForceAsyncNew):
             - 활성 주문: 접수되어 체결을 기다리는 주문
             - 값이 없는 경우 빈 tuple, 있는 경우 generator를 반환합니다. list가 필요한 경우 list()로 감싸서 사용하세요.
         """
-        active_orders = self.orders_active.get(code, {})
+        active_orders = self.orders_onwait.get(code, {})
         if not active_orders:
             return ()
         return (odr for odr in active_orders.values() if odr.side == "S")
@@ -670,11 +669,11 @@ class KisKrStkOMS(ForceAsyncNew):
             - 예약 주문: 아직 체결되지 않은 주문 (접수 대기 중이거나 접수되어 체결을 기다리는 주문)
             - 값이 없는 경우 빈 tuple, 있는 경우 generator를 반환합니다. list가 필요한 경우 list()로 감싸서 사용하세요.
         """
-        if not self.orders_pending:
+        if not self.orders_onwire:
             return ()
         return (
             odr
-            for odr in self.orders_pending.values()
+            for odr in self.orders_onwire.values()
             if odr.code == code and odr.side == side
         )
 
@@ -687,11 +686,11 @@ class KisKrStkOMS(ForceAsyncNew):
             code: 종목 코드, 예) '005930'
             side: 주문 방향 ['B', 'S', 'A', 'C'] (Buy, Sell, Adjust, Cancel)
         """
-        if not self.orders_pending:
+        if not self.orders_onwire:
             return False
         return any(
             odr
-            for odr in self.orders_pending.values()
+            for odr in self.orders_onwire.values()
             if odr.code == code and odr.side == side
         )
 
@@ -762,7 +761,7 @@ class KisKrStkOMS(ForceAsyncNew):
         omsid = self._get_omsid()
         odr = self._mempool.alloc()
         odr.init(omsid, code, odrside, odrkind, odrqty, odrprc)
-        self.orders_pending[omsid] = odr
+        self.orders_onwire[omsid] = odr
 
         task = self._loop.create_task(
             self._async_order_cash(
@@ -792,13 +791,13 @@ class KisKrStkOMS(ForceAsyncNew):
             allqty: 전량 주문 여부 ['Y', 'N'], default 'Y'
             exgcode: 거래소 ['KRX', 'NXT', 'SOR'], default 'KRX'
         """
-        oodr = self.orders_active.setdefault(code, {}).get(odrno, None)
+        oodr = self.orders_onwait.setdefault(code, {}).get(odrno, None)
         if oodr is None:
             self.on_error(self, KisErrOrderNotFund(odrno))
             return
 
         # If cancel is ongoing, return immediately to prevent duplicate cancel attempts.
-        if odrno in self.orders_pending:
+        if odrno in self.orders_onwire:
             return
 
         try:
@@ -812,7 +811,7 @@ class KisKrStkOMS(ForceAsyncNew):
         # Cancel orders are special, key for orders_pending is not omsid, but the original order number(odrno)
         odr = self._mempool.alloc()
         odr.init(omsid, code, "C", "00", odrqty, oodr.prc)
-        self.orders_pending[odrno] = odr
+        self.orders_onwire[odrno] = odr
 
         task = self._loop.create_task(
             self._async_order_cancel(odrno, odrqty, allqty, exgcode),
