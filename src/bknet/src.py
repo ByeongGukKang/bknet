@@ -230,6 +230,7 @@ class WebsocketWrapper(ForceAsyncNew):
 
         class WebsocketClientImpl(_WebsocketClient):
             def on_ws_connected(self, transport: WSTransport):
+                instance.transport = transport
                 instance.disconnected_event.clear()
                 instance.on_ws_connected(instance)
 
