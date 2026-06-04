@@ -263,7 +263,7 @@ class AggStkBook(WebsocketTr):
     TrLength = 65
 
 
-class NxtStkExec(WebsocketTr):
+class WsNxtStkExec(WsKrxStkExec):
     """국내주식체결 [NXT]
 
     https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0NXCNT0
@@ -273,7 +273,7 @@ class NxtStkExec(WebsocketTr):
     TrLength = 46
 
 
-class NxtStkBook(WebsocketTr):
+class WsNxtStkBook(WsKrxStkBook):
     """국내주식호가 [NXT]
 
     https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0NXASP0
