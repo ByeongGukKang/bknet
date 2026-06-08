@@ -4,41 +4,44 @@ from bknet.error import Error, SomethingNotEnough
 
 
 class HypeErrPython(Error[Exception]):
+    data: Exception
+    "python exception"
     code = "HypeErrPython"
     msg = "[Hype] Python exception"
 
 
 class HypeErrApiLimit(Error[None]):
+    data: None
     code = "HypeApiError"
     msg = "[Hype] API limit reached"
 
 
 class HypeErrOrphanFilled(Error[int]):
+    data: int
+    "oid, order_id"
     code = "HypeErrOrphanOrderExecuted"
     msg = "[Hype] Orphan order executed"
-    data: int
-    "order_id"
 
 
 class HypeErrOrderNotFund(Error[int]):
+    data: int
+    "oid, order_id"
     code = "HypeErrOrderNotFund"
     msg = "[Hype] Order not found"
-    data: int
-    "order_id"
 
 
 class HypeErrOrderRejected(Error[str]):
+    data: str
+    "string message from Hype"
     code = "HypeErrOrderRejected"
     msg = "[Hype] Order rejected"
-    data: str
-    "str message from Hype"
 
 
 class HypeErrOrderFailed(Error[Dict]):
-    code = "HypeErrOrderFailed"
-    msg = "[Hype] Order failed"
     data: Dict
     "json message from Hype"
+    code = "HypeErrOrderFailed"
+    msg = "[Hype] Order failed"
 
 
 class HypeErrNotEnoughMargin(Error[SomethingNotEnough]):

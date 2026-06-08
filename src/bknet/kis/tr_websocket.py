@@ -413,3 +413,23 @@ class WsKrxIdxFutExec(WebsocketTr):
     "[43] 매도호가 잔량 합계"
     BqSum = 44
     "[44] 매수호가 잔량 합계"
+
+
+class WsKrxCommodityFutBook(WsKrxIdxFutBook):
+    """국내상품선물호가 [KRX]
+
+    https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0CFASP0
+    """
+
+    TrId = "H0CFASP0"
+    TrLength = 38
+
+
+class WsKrxCommodityFutExec(WsKrxIdxFutExec):
+    """국내상품선물체결 [KRX]
+
+    https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0CFCNT0
+    """
+
+    TrId = "H0CFCNT0"
+    TrLength = 50

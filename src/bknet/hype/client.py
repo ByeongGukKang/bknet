@@ -194,6 +194,8 @@ class HypeWsClient(WebsocketWrapper):
         callback = self._callbacks.get(msg.get("channel", ""), None)
         if callback is not None:
             callback(self, msg["data"])
+        elif callback == "pong":
+            pass  # ignore pong messages
         else:
             self._callback_default(self, msg)
 

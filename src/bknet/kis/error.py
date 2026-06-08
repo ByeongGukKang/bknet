@@ -14,24 +14,24 @@ class KisErrApiLimit(Error[None]):
 
 
 class KisErrOrphanOrderExecuted(Error[str]):
-    code = "KisErrOrphanOrderExecuted"
-    msg = "[Kis] Orphan order executed"
     data: str
     "order_id"
+    code = "KisErrOrphanOrderExecuted"
+    msg = "[Kis] Orphan order executed"
 
 
 class KisErrOrderNotFund(Error[str]):
-    code = "KisErrOrderNotFund"
-    msg = "[Kis] Order not found"
     data: str
     "order_id"
+    code = "KisErrOrderNotFund"
+    msg = "[Kis] Order not found"
 
 
 class KisErrOrderRejected(Error[Dict]):
-    code = "KisErrOrderRejected"
-    msg = "[Kis] Order rejected"
     data: Dict
     "json message from Kis"
+    code = "KisErrOrderRejected"
+    msg = "[Kis] Order rejected"
 
 
 class KisErrNotEnoughMargin(Error[SomethingNotEnough]):

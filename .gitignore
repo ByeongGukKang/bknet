@@ -11,8 +11,10 @@ wheels/
 
 # Config files
 *.json
+*.env
 
 # Personal codes
+tests_private/
 test.py
 data_collect/
 research/

@@ -27,6 +27,7 @@ dependencies = [
     "ormsgpack>=1.12.2",
     "pip>=26.1.1",
     "whenever>=0.10.0",
+    "msgpack>=1.1.2",
 ]
 
 [tool.uv.workspace]

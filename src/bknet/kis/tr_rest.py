@@ -1,11 +1,16 @@
+import io
+import os
+import zipfile
 from typing import Literal
 
+import pandas as pd
+from curl_cffi import requests
 from gufo.http import RequestMethod, Response
 
 from bknet.kis.client import KisHttpClient
 
 
-class RestKrStock:
+class KisRestKrStock:
     @staticmethod
     async def stk_price(
         http_client: KisHttpClient, mrkt_div_code: Literal["J", "NX", "UN"], code: str
@@ -86,7 +91,7 @@ class RestKrStock:
         )
 
 
-class RestKrDerivatives:
+class KisRestKrDerivatives:
     @staticmethod
     async def fut_board(http_client: KisHttpClient, mrkt_cls_code: str) -> Response:
         """[국내선물옵션] 국내옵션전광판_선물
@@ -133,3 +138,67 @@ class RestKrDerivatives:
             params=f"/uapi/domestic-futureoption/v1/quotations/inquire-daily-fuopchartprice?FID_COND_MRKT_DIV_CODE={mrkt_div_code}&FID_INPUT_ISCD={code}&FID_INPUT_DATE_1={sdate}&FID_INPUT_DATE_2={edate}&FID_PERIOD_DIV_CODE={period_div_code}",
             headers=req_headers,
         )
+
+
+class KisRestSecurityMasterFile:
+    """종목정보파일
+
+    https://apiportal.koreainvestment.com/apiservice-category
+    """
+
+    url_derivatives_commodity = (
+        "https://new.real.download.dws.co.kr/common/master/fo_com_code.mst.zip"
+    )
+
+    @staticmethod
+    def derivatives_commodity() -> pd.DataFrame:
+        """상품선물옵션 마스터파일 데이터프레임
+
+        https://github.com/koreainvestment/open-trading-api/blob/main/stocks_info/종목마스터정보(상품선물옵션).h
+
+        Note:
+            dataframe columns: ['상품구분', '상품종류', '단축코드', '표준코드', '한글종목명', '월물구분코드', '기초자산단축코드', '기초자산명']
+        """
+        response = requests.get(
+            KisRestSecurityMasterFile.url_derivatives_commodity, impersonate="chrome"
+        )
+        response.raise_for_status()
+
+        with zipfile.ZipFile(io.BytesIO(response.content)) as zip_file:
+            file_list = zip_file.namelist()
+            mst_filename = [f for f in file_list if f.endswith(".mst")][0]
+
+            with zip_file.open(mst_filename) as f:
+                content = f.read().decode("cp949")
+
+        rows_data = []
+        for line in content.splitlines():
+            if not line.strip():
+                continue
+
+            p1_1 = line[0:1]
+            p1_2 = line[1:2]
+            p1_3 = line[2:11].strip()
+            p1_4 = line[11:23].strip()
+            p1_5 = line[23:55].strip()
+
+            part2 = line[55:]
+            p2_1 = part2[8:9]
+            p2_2 = part2[9:12]
+            p2_3 = part2[12:].strip()
+
+            rows_data.append([p1_1, p1_2, p1_3, p1_4, p1_5, p2_1, p2_2, p2_3])
+
+        columns = [
+            "상품구분",
+            "상품종류",
+            "단축코드",
+            "표준코드",
+            "한글종목명",
+            "월물구분코드",
+            "기초자산단축코드",
+            "기초자산명",
+        ]
+        df = pd.DataFrame(rows_data, columns=columns)
+
+        return df

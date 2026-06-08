@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import dataclass, field
+from decimal import Decimal
 from hashlib import md5
 from typing import (
     Callable,
@@ -32,7 +33,7 @@ from bknet.hype.error import (
     HypeErrorTinyOrder,
     HypeErrPython,
 )
-from bknet.hype.tr_rest import HypeRestInfoPerp
+from bknet.hype.tr_rest import HypeRestInfoPerp, HypeRestInfoSpot
 from bknet.hype.tr_websocket import HypeWsOrderUpdates
 from bknet.src import ForceAsyncNew, Macro, MemoryPool, async_schedule
 
@@ -80,37 +81,30 @@ class HypeOrderModify(TypedDict):
     builder_fee: NotRequired[float]
 
 
-# Type alias for cloid
-class HypeTyCloid(str):
-    "Always valid 128 bit hex string"
+# Type for cloid
+class HypeTyCloid:
+    """128-bit Client Order ID container for Hyperliquid."""
 
-    def __new__(cls, cloid: Union[str, int]) -> "HypeTyCloid":
-        if type(cloid) is HypeTyCloid:
-            return cloid
-        elif type(cloid) is int:
-            return HypeTyCloid(f"0x{cloid:032x}")
-        elif type(cloid) is str:
+    __slots__ = ("hex_clean", "raw_bytes")
+
+    hex_clean: str
+    raw_bytes: bytes
+
+    def __init__(self, cloid: Union[str, int]) -> None:
+        if isinstance(cloid, int):
+            clean = f"{cloid:032x}"
+        elif isinstance(cloid, str):
             clean = cloid[2:] if cloid.startswith("0x") else cloid
-            cl_len = len(clean)
-
-            if cl_len == 32:
-                try:
-                    int(clean, 16)
-                    return HypeTyCloid(f"0x{clean.lower()}")
-                except ValueError:
-                    pass
-
-            if cl_len < 32:
-                try:
-                    int(clean, 16)
-                    return HypeTyCloid(f"0x{clean.lower():0>32}")
-                except ValueError:
-                    pass
-
-            hashed = md5(cloid.encode("utf-8")).hexdigest()
-            return HypeTyCloid(f"0x{hashed}")
+            if len(clean) != 32:
+                clean = md5(cloid.encode("utf-8")).hexdigest()
         else:
             raise TypeError(f"Invalid cloid type: {type(cloid)}")
+
+        self.hex_clean = clean.lower()
+        self.raw_bytes = bytes.fromhex(self.hex_clean)
+
+    def __str__(self) -> str:
+        return self.hex_clean
 
 
 @dataclass(slots=True, frozen=True)
@@ -120,21 +114,54 @@ class HypeCoinInfo:
     maxLeverage: int
     prcDecimals: int = field(init=False)
 
-    def __post_init__(self) -> None:
-        """Automatically set prcDecimals.
+    # Multiplier for low-latency optimization
+    _price_multiplier: float = field(init=False, repr=False)
+    _size_multiplier: float = field(init=False, repr=False)
 
-        https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/tick-and-lot-size
-        """
-        # frozen=True bypass
-        object.__setattr__(self, "prcDecimals", 6 - self.szDecimals)
+    # Format strings for low-latency optimization
+    _price_fmt: str = field(init=False, repr=False)
+    _size_fmt: str = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        prc_dec = 6 - self.szDecimals
+        object.__setattr__(self, "prcDecimals", prc_dec)
+
+        # multiplier precomputation for numeric normalization (e.g., 10^prcDecimals)
+        object.__setattr__(self, "_price_multiplier", 10.0**prc_dec)
+        object.__setattr__(self, "_size_multiplier", 10.0**self.szDecimals)
+
+        # precompute C-style format strings for price and size to avoid dynamic string construction during formatting
+        object.__setattr__(self, "_price_fmt", f"%.{prc_dec}f")
+        object.__setattr__(self, "_size_fmt", f"%.{self.szDecimals}f")
 
     def format_price(self, price: float) -> str:
-        """Format the price according to the prcDecimals of the coin."""
-        return f"{price:.{self.prcDecimals}f}"
+        """float price to Hyperliquid API string format"""
+        s = self._price_fmt % price
+        if "." in s:
+            s = s.rstrip("0").rstrip(".")
+        return s if s != "-0" and s != "" else "0"
 
     def format_size(self, size: float) -> str:
-        """Format the size according to the szDecimals of the coin."""
-        return f"{size:.{self.szDecimals}f}"
+        """float size to Hyperliquid API string format"""
+        s = self._size_fmt % size
+        if "." in s:
+            s = s.rstrip("0").rstrip(".")
+        return s if s != "-0" and s != "" else "0"
+
+
+#     def format_price(self, price: float) -> str:
+#         """Format the price according to the prcDecimals of the coin."""
+#         rounded = f"{price:.{self.prcDecimals}f}"
+#         if rounded == "-0":
+#             rounded = "0"
+#         return f"{Decimal(rounded).normalize():f}"
+
+#     def format_size(self, size: float) -> str:
+#         """Format the size according to the szDecimals of the coin."""
+#         rounded = f"{size:.{self.szDecimals}f}"
+#         if rounded == "-0":
+#             rounded = "0"
+#         return f"{Decimal(rounded).normalize():f}"
 
 
 @dataclass(slots=True)
@@ -246,6 +273,8 @@ class HypePerpOMS(ForceAsyncNew):
 
         instance.http_client = http_client
 
+        instance.on_error = on_error
+
         instance.orders_onwire = {}
         instance.orders_onwait = {}
         instance.orders_orphan_filled = {}  # executed message received before order accepted message
@@ -345,7 +374,7 @@ class HypePerpOMS(ForceAsyncNew):
         size: float,
         reduceOnly: bool,
         odrtype: Literal["Alo", "Ioc", "Gtc"],
-        cloid: Optional[str],
+        cloid: Optional[HypeTyCloid],
         grouping: Literal["na", "normalTpsl", "positionTpsl"],
         # vaultAddress: Optional[str] = None,
         # expiresAfter: Optional[int] = None,
@@ -377,15 +406,15 @@ class HypePerpOMS(ForceAsyncNew):
         if cloid is None:
             order_slot.pop("c", None)
         else:
-            order_slot["c"] = cloid
+            order_slot["c"] = f"0x{cloid.hex_clean}"
 
         action_dict["grouping"] = grouping
 
         # pack for signing
         pack_for_signing = (
-            ormsgpack_packb(action_dict)
+            ormsgpack_packb(action_dict)  #  option=OPT_SORT_KEYS
             + nonce.to_bytes(8, "big")
-            + b"\x00\x00"  # valutAddress & expiresAfter
+            + b"\x00"  # \x00 # valutAddress & expiresAfter
         )
 
         # generate signature
@@ -400,7 +429,7 @@ class HypePerpOMS(ForceAsyncNew):
                 f'"p":"{price_str}",'
                 f'"s":"{size_str}",'
                 f'"r":{reduceOnly_str},'
-                f'"t":{{"limit":{{"tif":"{odrtype}"}}}}}}'
+                f'"t":{{"limit":{{"tif":"{odrtype}"}}}}}}'  #
                 f'],"grouping":"{grouping}"}}'
             )
         else:
@@ -412,13 +441,14 @@ class HypePerpOMS(ForceAsyncNew):
                 f'"s":"{size_str}",'
                 f'"r":{reduceOnly_str},'
                 f'"t":{{"limit":{{"tif":"{odrtype}"}}}},'
-                f'"c":"{cloid}"}}'
+                f'"c":"0x{cloid.hex_clean}"}}'
                 f'],"grouping":"{grouping}"}}'
             )
 
         try:
             resp = await self.http_client.request_unsafe(
                 method=RequestMethod.POST,  # type: ignore
+                params="/exchange",
                 body=(
                     f'{{"action":{action_json},'
                     f'"nonce":{nonce},'
@@ -432,7 +462,15 @@ class HypePerpOMS(ForceAsyncNew):
             status: Dict = (
                 resp_json.get("response", {}).get("data", {}).get("statuses", [{}])[0]
             )
-            oid: int | None = status.get("resting", {}).get("oid", None)
+            oid: int | None = None
+            resting = status.get("resting")
+            if resting is not None:
+                oid = resting.get("oid")
+            else:
+                filled = status.get("filled")
+                if filled is not None:
+                    oid = filled.get("oid")
+            # TODO
             if oid is None:  # Error, order failed or rejected
                 # free memory
                 self._mempool.free(pedodr)
@@ -487,8 +525,8 @@ class HypePerpOMS(ForceAsyncNew):
     ) -> Optional[HypeErrOrphanFilled]:
         filled_coin = odr["coin"]
         filled_oid = odr["oid"]
-        filled_qty = float(odr["sz"])
-        filled_prc = float(odr["limitPx"])
+        filled_qty: float = float(odr["sz"])
+        filled_prc: float = float(odr["limitPx"])
 
         onwait_odr = self.orders_onwait.setdefault(filled_coin, {}).get(
             filled_oid, None
@@ -517,12 +555,14 @@ class HypePerpOMS(ForceAsyncNew):
 
         margin = self.margin
         if abs(posits[1]) < actpos_before:  # position reduced
-            # available margin increases when position is reduced
-            margin[1] += filled_qty * filled_prc
+            margin[1] += (
+                filled_qty * filled_prc
+            )  # available margin increases when position is reduced
         else:  # position increased
-            margin[0] += filled_qty * onwait_odr.prc
-            # available margin decreases when position is increased
-            margin[1] -= filled_qty * filled_prc
+            margin[0] += filled_qty * onwait_odr.prc  # pending margin is released
+            margin[1] -= (
+                filled_qty * filled_prc
+            )  # available margin decreases when position is increase
         onwait_odr.qty -= filled_qty
         if onwait_odr.qty == 0:
             del self.orders_onwait[filled_coin][filled_oid]
@@ -610,6 +650,14 @@ class HypePerpOMS(ForceAsyncNew):
                 )
 
     async def update_balance(self, user_address: str, dex_list: List[str]):
+        """Update the margin and position information.
+
+        Note:
+            Only USDC balance is considered for margin.
+        """
+        if "" not in dex_list:
+            dex_list.append("")
+
         resp = None
         for dex_name in dex_list:
             resp = await HypeRestInfoPerp.clearinghouseState(
@@ -619,8 +667,15 @@ class HypePerpOMS(ForceAsyncNew):
                 position = v["position"]
                 posit = self.posits.setdefault(position["coin"], [0.0, 0.0])
                 posit[1] = float(position["szi"])
+        # if resp is not None:
+        #     self.margin[1] = float(resp["marginSummary"]["totalRawUsd"])
+        resp = await HypeRestInfoSpot.clearinghouseState(self.http_client, user_address)
         if resp is not None:
-            self.margin[1] = float(resp["marginSummary"]["totalRawUsd"])
+            for token, total in resp["tokenToAvailableAfterMaintenance"]:
+                if token == 0:  # USDC
+                    self.margin[1] = float(total)
+                    break
+                # 235:USDE, 268:USDT0, 360:USDH
 
     def order_place(
         self,
