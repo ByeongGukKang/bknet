@@ -14,8 +14,8 @@ wheels/
 *.env
 
 # Personal codes
+any.py
 tests_private/
-test.py
 data_collect/
 research/
 _work/
