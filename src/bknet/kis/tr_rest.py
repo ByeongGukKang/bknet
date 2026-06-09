@@ -146,8 +146,11 @@ class KisRestSecurityMasterFile:
     https://apiportal.koreainvestment.com/apiservice-category
     """
 
-    url_derivatives_commodity = (
+    _url_derivatives_commodity = (
         "https://new.real.download.dws.co.kr/common/master/fo_com_code.mst.zip"
+    )
+    _url_derivatives_stock = (
+        "https://new.real.download.dws.co.kr/common/master/fo_stk_code_mts.mst.zip"
     )
 
     @staticmethod
@@ -160,7 +163,7 @@ class KisRestSecurityMasterFile:
             dataframe columns: ['상품구분', '상품종류', '단축코드', '표준코드', '한글종목명', '월물구분코드', '기초자산단축코드', '기초자산명']
         """
         response = requests.get(
-            KisRestSecurityMasterFile.url_derivatives_commodity, impersonate="chrome"
+            KisRestSecurityMasterFile._url_derivatives_commodity, impersonate="chrome"
         )
         response.raise_for_status()
 
@@ -200,5 +203,41 @@ class KisRestSecurityMasterFile:
             "기초자산명",
         ]
         df = pd.DataFrame(rows_data, columns=columns)
+
+        return df
+
+    @staticmethod
+    def derivatives_stock() -> pd.DataFrame:
+        """주식선물옵션 마스터파일 데이터프레임
+
+        https://github.com/koreainvestment/open-trading-api/blob/main/stocks_info/종목마스터정보(주식선물옵션).h
+
+        Note:
+            dataframe columns: ['상품종류','단축코드','표준코드','한글종목명','ATM구분','행사가','월물구분코드','기초자산단축코드',' 기초자산명']
+        """
+        response = requests.get(
+            KisRestSecurityMasterFile._url_derivatives_stock, impersonate="chrome"
+        )
+        response.raise_for_status()
+
+        with zipfile.ZipFile(io.BytesIO(response.content)) as zip_file:
+            file_list = zip_file.namelist()
+            mst_filename = [f for f in file_list if f.endswith(".mst")][0]
+
+            with zip_file.open(mst_filename) as f:
+                content = f.read().decode("cp949")
+
+        df = pd.read_table(io.StringIO(content), sep="|", header=None)
+        df.columns = [
+            "상품종류",
+            "단축코드",
+            "표준코드",
+            "한글종목명",
+            "ATM구분",
+            "행사가",
+            "월물구분코드",
+            "기초자산단축코드",
+            "기초자산명",
+        ]
 
         return df

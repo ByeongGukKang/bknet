@@ -223,7 +223,7 @@ class WsKrStkExecAlert(WebsocketTr):
     "[25] 주문가격"
 
 
-class KrxStkAfterMarketBook(WebsocketTr):
+class WsKrxStkAfterMarketBook(WebsocketTr):
     """국내주식시간외호가 [KRX]
 
     https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0STOAA0
@@ -233,7 +233,7 @@ class KrxStkAfterMarketBook(WebsocketTr):
     TrLength = 54
 
 
-class KrxStkAfterMarketExec(WebsocketTr):
+class WsKrxStkAfterMarketExec(WebsocketTr):
     """국내주식시간외체결 [KRX]
 
     https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0STOUP0
@@ -243,7 +243,7 @@ class KrxStkAfterMarketExec(WebsocketTr):
     TrLength = 43
 
 
-class AggStkExec(WebsocketTr):
+class WsAggStkExec(WebsocketTr):
     """국내주식체결 [통합]
 
     https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0UNCNT0
@@ -253,7 +253,7 @@ class AggStkExec(WebsocketTr):
     TrLength = 46
 
 
-class AggStkBook(WebsocketTr):
+class WsAggStkBook(WebsocketTr):
     """국내주식호가 [통합]
 
     https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0UNASP0
@@ -432,4 +432,24 @@ class WsKrxComFutExec(WsKrxIdxFutExec):
     """
 
     TrId = "H0CFCNT0"
+    TrLength = 50
+
+
+class WsKrxStkFutBook(WsKrxIdxFutBook):
+    """국내주식선물호가 [KRX]
+
+    https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0ZFASP0
+    """
+
+    TrId = "H0SFASP0"
+    TrLength = 38
+
+
+class WsKrxStkFutExec(WsKrxIdxFutExec):
+    """국내주식선물체결 [KRX]
+
+    https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0ZFCNT0
+    """
+
+    TrId = "H0SFCNT0"
     TrLength = 50
