@@ -1,6 +1,5 @@
 import asyncio
 from dataclasses import dataclass, field
-from decimal import Decimal
 from hashlib import md5
 from typing import (
     Callable,
@@ -713,6 +712,9 @@ class HypePerpOMS(ForceAsyncNew):
         delta_mrg = price * size
         pedmrg -= delta_mrg
 
+        posits = self.posits.setdefault(coin, [0, 0])
+        delta_pos = size if isbuy else -size
+
         if reduceOnly:
             pass
         elif delta_mrg < 10:
@@ -721,14 +723,17 @@ class HypePerpOMS(ForceAsyncNew):
                 {"action": "order_place", "current": delta_mrg, "required": 10.0}
             )
         elif (pedmrg + actmrg) < 0:
-            self.http_client._api_limit_weight += 1  # API token rollback
-            return HypeErrNotEnoughMargin(
-                {"action": "order_place", "current": actmrg, "required": delta_mrg}
-            )
+            actpos = posits[1]
+            if abs(actpos + delta_pos) > abs(
+                actpos
+            ):  # if new position is larger than current position, check margin
+                self.http_client._api_limit_weight += 1  # API token rollback
+                return HypeErrNotEnoughMargin(
+                    {"action": "order_place", "current": actmrg, "required": delta_mrg}
+                )
 
         self.margin[0] = pedmrg
-        posits = self.posits.setdefault(coin, [0, 0])
-        posits[0] += size if isbuy else -size
+        posits[0] += delta_pos
 
         # Allocate pending order
         omsid = self._get_omsid()

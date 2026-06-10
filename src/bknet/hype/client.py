@@ -191,10 +191,11 @@ class HypeWsClient(WebsocketWrapper):
 
     def _on_frame_wrapper(self, frame: WSFrame):
         msg = orjson_loads(frame.get_payload_as_memoryview())
-        callback = self._callbacks.get(msg.get("channel", ""), None)
+        channel = msg.get("channel", "")
+        callback = self._callbacks.get(channel, None)
         if callback is not None:
             callback(self, msg["data"])
-        elif callback == "pong":
+        elif channel == "pong":
             pass  # ignore pong messages
         else:
             self._callback_default(self, msg)

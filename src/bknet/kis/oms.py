@@ -123,43 +123,13 @@ class OrderAdjCanKind(StrEnum):
     "['02'] 정정"
 
 
-class TradeError(Exception):
-    """KrStkTradeRuntime에서 발생하는 에러의 베이스 클래스"""
-
-    pass
-
-
-class OrphanExecutionError(TradeError):
-    """체결 메시지 수신 시 주문 접수 메시지를 아직 수신하지 못한 경우 발생하는 에러"""
-
-    pass
-
-
-class ErrInsufficientPosition(TradeError):
-    """보유 수량이 부족한 경우 발생하는 에러"""
-
-    pass
-
-
-class ErrInsufficientCash(TradeError):
-    """주문 시 보유 현금이 부족한 경우 발생하는 에러"""
-
-    pass
-
-
-class ErrOrderNotFound(TradeError):
-    """주문 취소 시 해당 주문을 찾을 수 없는 경우 발생하는 에러"""
-
-    pass
-
-
 @dataclass(slots=True)
 class KrStkOrder:
-    omsid: str = ""
-    exgId: str = ""
+    omsid: int = 0
+    oid: str = ""
     code: str = ""
-    side: Literal["", "B", "S", "A", "C"] = ""
     # 'B','S','A','C' (Buy, Sell, Adjust, Cancel)
+    side: Literal["", "B", "S", "A", "C"] = ""
     kind: Union[str, KrOrderKind] = ""
     qty: int = 0
     prc: int = 0
@@ -167,7 +137,7 @@ class KrStkOrder:
 
     def init(
         self,
-        omsid: str,
+        omsid: int,
         code: str,
         side: Literal["B", "S", "A", "C"],
         kind: Union[str, KrOrderKind],
@@ -175,12 +145,46 @@ class KrStkOrder:
         prc: int,
     ) -> None:
         self.omsid = omsid
-        self.exgId = ""
+        self.oid = ""
         self.code = code
         self.side = side
         self.kind = kind
         self.qty = qty
         self.prc = prc
+        self.status = "onwire"
+
+
+@dataclass(slots=True)
+class KrDevOrder:
+    omsid: int = 0
+    oid: str = ""
+    code: str = ""
+    # 'B','S','A','C' (Buy, Sell, Adjust, Cancel)
+    side: Literal["", "B", "S", "A", "C"] = ""
+    kind: Literal["", "01", "02", "03", "04", "10", "11", "12", "13", "14", "15"] = ""
+    qty: int = 0
+    prc: int = 0
+    leverage: float = 0.0
+    status: Literal["", "onwire", "onwait", "partial"] = ""
+
+    def init(
+        self,
+        omsid: int,
+        code: str,
+        side: Literal["B", "S", "A", "C"],
+        kind: Literal["01", "02", "03", "04", "10", "11", "12", "13", "14", "15"],
+        qty: int,
+        prc: int,
+        leverage: float,
+    ) -> None:
+        self.omsid = omsid
+        self.oid = ""
+        self.code = code
+        self.side = side
+        self.kind = kind
+        self.qty = qty
+        self.prc = prc
+        self.leverage = leverage
         self.status = "onwire"
 
 
@@ -209,8 +213,8 @@ class KisKrStkOMS(ForceAsyncNew):
     _headers_buy: dict[str, bytes]
     _headers_sell: dict[str, bytes]
     _headers_cancel: dict[str, bytes]
-    orders_onwire: dict[str, KrStkOrder]
-    "omsid -> KrStkOrder"
+    orders_onwire: dict[str | int, KrStkOrder]
+    "omsid -> KrStkOrder, or odrno -> KrStkOrder for cancel orders"
     orders_onwait: dict[str, dict[str, KrStkOrder]]
     "code -> exgId -> KrStkOrder"
     orders_orphan: dict[str, list[tuple[int, int, str]]]
@@ -310,9 +314,9 @@ class KisKrStkOMS(ForceAsyncNew):
 
         return instance
 
-    def _get_omsid(self) -> str:
+    def _get_omsid(self) -> int:
         self._omsid += 1
-        return str(self._omsid)
+        return self._omsid
 
     def _handle_orphan_orders(self, exgId: str, code: str, odrside: Literal["B", "S"]):
         orphan_odrs = self.orders_orphan.pop(exgId, None)
@@ -329,7 +333,7 @@ class KisKrStkOMS(ForceAsyncNew):
 
     async def _async_order_cash(
         self,
-        omsid: str,
+        omsid: int,
         code: str,
         odrside: Literal["B", "S"],
         odrkind: Union[str, KrOrderKind],
@@ -352,7 +356,7 @@ class KisKrStkOMS(ForceAsyncNew):
             rt_cd = resp_json.get("rt_cd", "")
             if rt_cd == "0":  # B/S order accepted
                 exgId = resp_json["output"]["ODNO"]
-                pending_odr.exgId = exgId
+                pending_odr.oid = exgId
                 pending_odr.status = "onwait"
                 self.orders_onwait.setdefault(code, {})[exgId] = pending_odr
                 self._handle_orphan_orders(exgId, code, odrside)
@@ -760,7 +764,7 @@ class KisKrStkOMS(ForceAsyncNew):
         # Allocate pending order
         omsid = self._get_omsid()
         odr = self._mempool.alloc()
-        odr.init(omsid, code, odrside, odrkind, odrqty, odrprc)
+        odr.init(self._get_omsid(), code, odrside, odrkind, odrqty, odrprc)
         self.orders_onwire[omsid] = odr
 
         task = self._loop.create_task(
@@ -807,14 +811,641 @@ class KisKrStkOMS(ForceAsyncNew):
             return
 
         # Allocate pending cancel,
-        omsid = self._get_omsid()
         # Cancel orders are special, key for orders_pending is not omsid, but the original order number(odrno)
         odr = self._mempool.alloc()
-        odr.init(omsid, code, "C", "00", odrqty, oodr.prc)
+        odr.init(self._get_omsid(), code, "C", "00", odrqty, oodr.prc)
         self.orders_onwire[odrno] = odr
 
         task = self._loop.create_task(
             self._async_order_cancel(odrno, odrqty, allqty, exgcode),
+            # eager_start = True
+        )
+        self.bg_tasks.add(task)
+        task.add_done_callback(self.bg_tasks.discard)
+
+
+class KisKrDevOMS(ForceAsyncNew):
+    ## user inputs
+    # KisKrDevOMS specific inputs
+    cano: str
+    acnt_prdt_cd: str
+    hts_id: str
+    # shared
+    http_client: KisHttpClient
+    on_order_filled: Callable[[Self, str, bool, int, float], None]
+    "on_order_filled(KisKrStkOMS, code, isBuy, filled_qty, filled_prc)"
+    on_order_canceled: Callable[[Self, KrDevOrder], None]
+    "on_order_canceled(KisKrStkOMS, KrFutOptOrder)"
+    on_order_adjusted: Callable[[Self, KrDevOrder], None]
+    "on_order_adjusted(KisKrStkOMS, KrFutOptOrder)"
+    on_error: Callable[[Self, Error], None]
+    "on_error(KisKrStkOMS, Error)"
+    timeout: float = 1.0
+
+    ## internal states
+    # KisKrDevOMS specific states
+    _headers_buysell_day: dict[str, bytes]
+    _headers_buysell_night: dict[str, bytes]
+    _headers_adjcan_day: dict[str, bytes]
+    _headers_adjcan_night: dict[str, bytes]
+    # shared
+    margin: list[float]
+    "[pending_margin, active_margin]"
+    posits: dict[str, list[int]]
+    "code -> [pending_qty, active_qty]"
+    orders_onwire: dict[str | int, KrDevOrder]
+    "omsid -> KrDevOrder, oid for cancel orders"
+    orders_onwait: dict[str, dict[str, KrDevOrder]]
+    "code -> oid -> KrDevOrder"
+    orders_orphan: dict[str, list[tuple[int, float]]]
+    "oid -> list[tuple[filled_qty, filled_prc]]"
+    # order management
+    _omsid: int
+    _mempool: MemoryPool[KrDevOrder]
+    # async management
+    _loop: asyncio.AbstractEventLoop
+    bg_tasks: set[asyncio.Task]
+
+    @classmethod
+    async def New(
+        cls,
+        cano: str,
+        acnt_prdt_cd: str,
+        hts_id: str,
+        http_client: KisHttpClient,
+        ws_client: KisWsClient,
+        on_order_cash: Callable[[Self, dict], None],
+        on_order_cancel: Callable[[Self, dict], None],
+        on_order_executed: Callable[
+            [Self, str, Literal["B", "S", "A", "C"], int, int, str],
+            None,
+        ],
+        on_error: Callable[[Self, Error], None],
+        timeout: float = 1.0,
+        mempool_size: int = 128,
+    ) -> Self:
+        """KIS 국내주식 실시간 주문/체결 관리
+
+        Args:
+            cano (str): 계좌번호
+            acnt_prdt_cd (str): 상품유형코드
+            hts_id (str): HTS 아이디
+            http_client (KisHttpClient): KisHttpClient 인스턴스
+            ws_client (KisWsClient): KisWsClient 인스턴스
+            on_order_cash (Callable[[KisKrStkOMS, dict], None]): 현금 주문 결과 콜백, on_order_cash(self, json)
+            on_order_cancel (Callable[[KisKrStkOMS, dict], None]): 주문 취소 결과 콜백, on_order_cancel(self, json)
+            on_order_executed (Callable[[KisKrStkOMS, str, Literal["B", "S"], int, int, str], None]): 주문 체결 결과 콜백, on_order_executed(self, code, odrside, exeqty, exeprc, exgcode)
+            on_error (Callable[[KisKrStkOMS, Error], None]): 에러 콜백, on_error(self, Error)
+            timeout (float): HTTP 요청 타임아웃, default 1.0
+            mempool_size (int): 메모리 풀 크기, default 128
+
+        Note:
+        - ws_clinet에 자동으로 WsKrStkExecAlert 등록, 체결 메시지 수신 시 on_order_executed 호출.
+        - ws_clinet에 WsKrStkExecAlert 콜백을 덮어쓰지 마세요.
+        """
+        instance = cls(cls._prevented)
+        instance.cano = cano
+        instance.acnt_prdt_cd = acnt_prdt_cd
+        instance.hts_id = hts_id
+
+        instance.http_client = http_client
+
+        instance.on_order_cash = on_order_cash
+        instance.on_order_cancel = on_order_cancel
+        instance.on_order_filled = on_order_executed
+        instance.on_error = on_error
+        instance.timeout = timeout
+
+        instance.margin = [0.0, 0.0]
+        instance.posits = {}
+
+        base_headers = {
+            "content-type": b"application/json",
+            "authorization": http_client.client.headers["authorization"],  # type: ignore
+            "appkey": http_client.client.headers["appkey"],  # type: ignore
+            "appsecret": http_client.client.headers["appsecret"],  # type: ignore
+            "custtype": http_client.custtype.encode(),
+        }
+
+        # header types per order type, tr_id is different for buy/sell/cancel, illiminate header copying
+        instance._headers_buysell_day = base_headers.copy()
+        instance._headers_buysell_day["tr_id"] = b"TTTO1101U"  # Daytime Buy/Sell
+        instance._headers_buysell_night = base_headers.copy()
+        instance._headers_buysell_night["tr_id"] = b"STTN1101U"  # Nighttime Buy/Sell
+        instance._headers_adjcan_day = base_headers.copy()
+        instance._headers_adjcan_day["tr_id"] = b"TTTO1103U"  # Daytime Adjust/Cancel
+        instance._headers_adjcan_night = base_headers.copy()
+        instance._headers_adjcan_night["tr_id"] = (
+            b"STTN1103U"  # Nighttime Adjust/Cancel
+        )
+
+        instance.orders_onwire = {}
+        instance.orders_onwait = {}
+        instance.orders_orphan = {}  # executed message received before order accepted message
+
+        instance.bg_tasks = http_client.bg_tasks
+        instance._loop = asyncio.get_running_loop()
+        instance._omsid = 0
+
+        instance._mempool = MemoryPool(KrDevOrder, mempool_size)
+
+        # Bind WsKrStkExecAlert handler to ws_client
+        instance.bind_ws_client(ws_client, hts_id)
+
+        # Initialize cash and positions
+        await instance.update_margin()
+        await instance.update_posits()
+
+        return instance
+
+    def _get_omsid(self) -> int:
+        self._omsid += 1
+        return self._omsid
+
+    def _handle_orphan_orders(self, oid: str, code: str, isBuy: bool):
+        orphan_odrs = self.orders_orphan.pop(oid, None)
+        if orphan_odrs is None:
+            return
+        for filled_qty, filled_prc in orphan_odrs:
+            err = self._handle_order_filled(code, isBuy, filled_qty, filled_prc, oid)
+            if err is None:
+                self.on_order_filled(self, code, isBuy, filled_qty, filled_prc)
+            else:
+                self.on_error(self, err)
+
+    async def _async_order_place(
+        self,
+        omsid: int,
+        code: str,
+        isbuy: bool,
+        odrkind: Literal["01", "02", "03", "04", "10", "11", "12", "13", "14", "15"],
+        qty: int,
+        prc: int,
+    ) -> None:
+        try:
+            buysell_code = "02" if isbuy else "02"
+            resp = await self.http_client.request_unsafe(
+                method=RequestMethod.POST,  # type: ignore
+                params="/uapi/domestic-futureoption/v1/trading/order",
+                body=f'{{"ORD_PRCS_DVSN_CD":"02","CANO":"{self.cano}","ACNT_PRDT_CD":"{self.acnt_prdt_cd}","SLL_BUY_DVSN_CD":{buysell_code},"SHTN_PDNO":"{code}","ORD_QTY":"{qty}","UNIT_PRICE":"{prc}","ORD_DVSN_CD":"{odrkind}"}}'.encode(),
+                headers=self._headers_buysell_day,
+            )
+            # update order status
+            pending_odr = self.orders_onwire.pop(omsid, None)
+            if pending_odr is None:
+                return
+            resp_json: dict = orjson_loads(resp.content)
+            rt_cd = resp_json.get("rt_cd", "")
+            if rt_cd == "0":  # B/S order accepted
+                oid = resp_json["output"]["ODNO"]
+                pending_odr.oid = oid
+                pending_odr.status = "onwait"
+                self.orders_onwait.setdefault(code, {})[oid] = pending_odr
+                self._handle_orphan_orders(oid, code, isbuy)
+            else:  # order rejected
+                self._mempool.free(pending_odr)
+                # recover margin and position
+                self.margin[0] += prc * (qty if isbuy else -qty)
+                self.posits[code][0] -= qty
+                self.on_error(self, KisErrOrderRejected(resp_json))
+        except Exception as e:
+            pending_odr = self.orders_onwire.pop(omsid, None)
+            if pending_odr is not None:
+                self._mempool.free(pending_odr)
+            self.margin[0] += prc * (qty if isbuy else -qty)
+            self.posits[code][0] -= qty
+            self.on_error(self, KisErrPython(e))
+
+    async def _async_order_cancel(
+        self,
+        odrno: str,
+        qty: int,
+        isAllQty: Literal["Y", "N"],
+    ) -> None:
+        try:
+            resp = await self.http_client.request_unsafe(
+                method=RequestMethod.POST,  # type: ignore
+                params="/uapi/domestic-futureoption/v1/trading/order-rvsecncl",
+                body=f'{{"ORD_PRCS_DVSN_CD":"02","CANO":"{self.cano}","ACNT_PRDT_CD":"{self.acnt_prdt_cd}","RVSE_CNCL_DVSN_CD":"02","ORGN_ODNO":"{odrno}","ORD_QTY":"{qty}","UNIT_PRICE":"0","NMPR_TYPE_CD":"01","KRX_NMPR_CNDT_CD":"0","RMN_QTY_YN":"{isAllQty}","ORD_DVSN_CD":"01"}}'.encode(),
+                headers=self._headers_adjcan_day,
+            )
+            resp_json: dict = orjson_loads(resp.content)
+            rt_cd = resp_json.get("rt_cd", "")
+            if rt_cd == "0":  # Cancel order accepted
+                pass
+            else:  # order rejected
+                pending_odr = self.orders_onwire.pop(odrno, None)
+                if pending_odr is not None:
+                    self._mempool.free(pending_odr)
+                self.on_error(self, KisErrOrderRejected(resp_json))
+        except Exception as e:
+            pending_odr = self.orders_onwire.pop(odrno, None)
+            if pending_odr is not None:
+                self._mempool.free(pending_odr)
+            self.on_error(self, KisErrPython(e))
+
+    def _handle_order_filled(
+        self,
+        filled_code: str,
+        isBuy: bool,
+        filled_qty: int,
+        filled_prc: float,
+        filled_oid: str,
+    ) -> Optional[KisErrOrphanOrderExecuted]:
+        onwait_odr = self.orders_onwait.setdefault(filled_code, {}).get(
+            filled_oid, None
+        )
+        if (
+            onwait_odr is None
+        ):  # orphan execution, order accepted message is not received yet.
+            orphan_odr = self.orders_orphan.get(filled_oid, None)
+            if orphan_odr is None:
+                self.orders_orphan[filled_oid] = [(filled_qty, filled_prc)]
+            else:
+                orphan_odr.append((filled_qty, filled_prc))
+            return KisErrOrphanOrderExecuted(filled_oid)
+
+        posits = self.posits[
+            filled_code
+        ]  # assert No KeyError, posit is initialized when order is placed
+        actpos_before = abs(posits[1])
+
+        if isBuy:
+            posits[0] -= filled_qty
+            posits[1] += filled_qty
+        else:
+            posits[0] += filled_qty
+            posits[1] -= filled_qty
+
+        margin = self.margin
+        if abs(posits[1]) < actpos_before:  # position reduced
+            margin[1] += (
+                filled_qty * filled_prc
+            )  # available margin increases when position is reduced
+        else:  # position increased
+            margin[0] += filled_qty * onwait_odr.prc  # pending margin is released
+            margin[1] -= (
+                filled_qty * filled_prc
+            )  # available margin decreases when position is increase
+        onwait_odr.qty -= filled_qty
+        if onwait_odr.qty == 0:
+            del self.orders_onwait[filled_code][filled_oid]
+            self._mempool.free(onwait_odr)
+        else:
+            onwait_odr.status = "partial"
+
+        return None
+
+    def _handle_order_cancelled(
+        self,
+        cancel_code: str,
+        isBuy: bool,
+        cancel_qty: int,
+        cancel_oid: str,
+    ) -> Optional[KisErrOrderNotFund]:
+        onwait_odr = self.orders_onwait.setdefault(cancel_code, {}).get(
+            cancel_oid, None
+        )
+        if onwait_odr is None:
+            return KisErrOrderNotFund(cancel_oid)
+
+        posits = self.posits[cancel_code]
+        posits[0] += cancel_qty if isBuy else -cancel_qty
+        self.margin[0] += cancel_qty * onwait_odr.prc / onwait_odr.leverage
+
+        onwait_odr.qty -= cancel_qty
+        if onwait_odr.qty == 0:
+            del self.orders_onwait[cancel_code][cancel_oid]
+            self._mempool.free(onwait_odr)
+        else:
+            onwait_odr.status = "partial"
+
+        return None
+
+    def bind_ws_client(self, ws_client: KisWsClient, hts_id: str):
+        def _handle_WsKrStkExecAlert(_: KisWsClient, msg: list[bytes]) -> None:
+            if msg[14] == b"1":  # Order Received message
+                return
+
+            oid = msg[2].decode()
+            isBuy = False if msg[4] == b"01" else True
+            code = msg[8].decode()
+            qty = int(msg[9])
+            odrcond = msg[6]
+            if msg[5] == b"2":  # Cancel message
+                if odrcond == "01":  # Regular cancel
+                    # Original order id
+                    oOid = msg[3].decode()
+                    # remove pending cancel order
+                    odr = self.orders_onwire.pop(oOid, None)
+                    if odr is None:
+                        self.on_error(self, KisErrOrderNotFund(oOid))
+                        return
+                    self._mempool.free(odr)
+                    err = self._handle_order_cancelled(code, isBuy, qty, oid)
+                    if err is None:
+                        self.on_order_filled(self, code, "C", qty, odr.prc)
+                    else:
+                        self.on_error(self, err)
+                else:  # IOC/FOK cancel
+                    pass
+            elif msg[5] == b"1":  # Adjust message
+                pass
+            else:  # execution message
+                filled_prc = int(msg[10])
+                err = self._handle_order_filled(code, isBuy, qty, filled_prc, oid)
+                if err is None:
+                    self.on_order_filled(
+                        self, code, "B" if isBuy else "S", qty, filled_prc
+                    )
+                else:
+                    self.on_error(self, err)
+
+        ws_client._callbacks[WsKrStkExecAlert.TrId.encode()] = (
+            WsKrStkExecAlert.TrLength,
+            _handle_WsKrStkExecAlert,
+        )
+        ws_client.subscribe(WsKrStkExecAlert.TrId, hts_id)
+
+    def update_all(self):
+        """현금 잔고와 모든 종목의 잔고를 조회하여 self.cash와 self.posits를 업데이트합니다."""
+        async_schedule(self.update_margin, self.bg_tasks)
+        async_schedule(self.update_posits, self.bg_tasks)
+
+    async def update_margin(self):
+        """현재 현금 잔고를 조회하여 self.cash를 업데이트합니다."""
+        req_header = self.http_client.client.headers.copy()  # type: ignore
+        req_header["tr_id"] = b"TTTC0869R"
+        try:
+            resp = await self.http_client.request(
+                method=RequestMethod.GET,  # type: ignore
+                params=f"/uapi/domestic-stock/v1/trading/intgr-margin?CANO={self.cano}&ACNT_PRDT_CD={self.acnt_prdt_cd}&CMA_EVLU_AMT_ICLD_YN=N&WCRC_FRCR_DVSN_CD=02&FWEX_CTRT_FRCR_DVSN_CD=02",
+                headers=req_header,
+                timeout=self.timeout,
+            )
+            resp_json = orjson_loads(resp.content)
+            if resp_json.get("rt_cd", "") != "0":
+                raise Exception(resp_json)
+            self.margin[1] = float(resp_json["output"]["stck_cash_ord_psbl_amt"])
+        except Exception as e:
+            self.on_error(self, KisErrPython(e))
+
+    async def update_posits(self):
+        """현재 잔고를 조회하여 self.posits를 업데이트합니다."""
+        req_header = self.http_client.client.headers.copy()  # type: ignore
+        req_header["tr_id"] = b"TTTC8434R"
+        try:
+            ctx_area_fk100 = ""
+            ctx_area_nk100 = ""
+            while True:
+                resp = await self.http_client.request(
+                    method=RequestMethod.GET,  # type: ignore
+                    params=f"/uapi/domestic-stock/v1/trading/inquire-balance?CANO={self.cano}&ACNT_PRDT_CD={self.acnt_prdt_cd}&AFHR_FLPR_YN=N&INQR_DVSN=01&UNPR_DVSN=01&FUND_STTL_ICLD_YN=N&FNCG_AMT_AUTO_RDPT_YN=N&PRCS_DVSN=00&CTX_AREA_FK100={ctx_area_fk100}&CTX_AREA_NK100={ctx_area_nk100}",
+                    headers=req_header,
+                    timeout=self.timeout,
+                )
+                resp_json = orjson_loads(resp.content)
+                if resp_json.get("rt_cd", "") != "0":
+                    raise Exception(resp_json)
+                ctx_area_fk100 = resp_json.get("ctx_area_fk100", "")
+                ctx_area_nk100 = resp_json.get("ctx_area_nk100", "")
+                posit_msgs = resp_json.get("output1", [])
+                for posit_msg in posit_msgs:
+                    code = posit_msg["pdno"]
+                    curr_pos = self.posits.get(code, None)
+                    if curr_pos is None:
+                        self.posits[code] = [0, int(posit_msg["hldg_qty"])]
+                    else:
+                        self.posits[code][1] = int(posit_msg["hldg_qty"])
+                if ctx_area_nk100.strip() == "":
+                    break
+        except Exception as e:
+            self.on_error(self, KisErrPython(e))
+        req_header["tr_id"] = b"TTTC0084R"
+        try:
+            ctx_area_fk100 = ""
+            ctx_area_nk100 = ""
+            while True:
+                resp = await self.http_client.request(
+                    method=RequestMethod.GET,  # type: ignore
+                    params=f"/uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl?CANO={self.cano}&ACNT_PRDT_CD={self.acnt_prdt_cd}&CTX_AREA_FK100={ctx_area_fk100}&CTX_AREA_NK100={ctx_area_nk100}&INQR_DVSN_1=0&INQR_DVSN_2=0",
+                    headers=req_header,
+                    timeout=self.timeout,
+                )
+                resp_json = orjson_loads(resp.content)
+                if resp_json.get("rt_cd", "") != "0":
+                    raise Exception(resp_json)
+                ctx_area_fk100 = resp_json.get("ctx_area_fk100", "")
+                ctx_area_nk100 = resp_json.get("ctx_area_nk100", "")
+                posit_msgs = resp_json.get("output1", [])
+                for posit_msg in posit_msgs:
+                    code = posit_msg["pdno"]
+                    curr_pos = self.posits.get(code, None)
+                    existing_qty = int(posit_msg["psbl_qty"]) * (
+                        1 if posit_msg["sll_buy_dvsn_cd"] == "02" else -1
+                    )
+                    if curr_pos is None:
+                        self.posits[code] = [existing_qty, 0]
+                    else:
+                        self.posits[code][0] += existing_qty
+                if ctx_area_nk100.strip() == "":
+                    break
+        except Exception as e:
+            self.on_error(self, KisErrPython(e))
+
+    def get_margin(self) -> list[float]:
+        """[pending_margin, active_margin]를 반환합니다.
+
+        Note:
+            - pending_margin: 아직 체결되지 않은 주문에 예약된 증거금
+            - active_margin: 실제 증거금 잔고
+        """
+        return self.margin
+
+    def get_posit(self, code: str) -> list[int]:
+        """code 종목의 [pending_qty, active_qty]를 반환합니다.
+
+        Args:
+            code: 종목 코드, 예) '005930'
+
+        Note:
+            - pending_qty: 아직 체결되지 않은 수량
+            - active_qty: 체결된 수량
+        """
+        return self.posits.get(code, [0, 0])
+
+    def get_active_bids(self, code: str) -> Iterable[KrStkOrder]:
+        """code 종목의 활성 매수 주문들을 반환합니다.
+
+        Args:
+            code: 종목 코드, 예) '005930'
+
+        Note:
+            - 활성 주문: 접수되어 체결을 기다리는 주문
+            - 값이 없는 경우 빈 tuple, 있는 경우 generator를 반환합니다. list가 필요한 경우 list()로 감싸서 사용하세요.
+        """
+        active_orders = self.orders_onwait.get(code, {})
+        if not active_orders:
+            return ()
+        return (odr for odr in active_orders.values() if odr.side == "B")
+
+    def get_active_asks(self, code: str) -> Iterable[KrStkOrder]:
+        """code 종목의 활성 매도 주문들을 반환합니다.
+
+        Args:
+            code: 종목 코드, 예) '005930'
+
+        Note:
+            - 활성 주문: 접수되어 체결을 기다리는 주문
+            - 값이 없는 경우 빈 tuple, 있는 경우 generator를 반환합니다. list가 필요한 경우 list()로 감싸서 사용하세요.
+        """
+        active_orders = self.orders_onwait.get(code, {})
+        if not active_orders:
+            return ()
+        return (odr for odr in active_orders.values() if odr.side == "S")
+
+    def get_pending_orders(
+        self, code: str, side: Literal["B", "S", "A", "C"]
+    ) -> Iterable[KrStkOrder]:
+        """code 종목의 side 방향의 모든 OnWire/OnWait 주문들을 반환합니다.
+
+        Args:
+            code: 종목 코드, 예) '005930'
+            side: 주문 방향 ['B', 'S', 'A', 'C'] (Buy, Sell, Adjust, Cancel)
+
+        Note:
+            - 예약 주문: 아직 체결되지 않은 주문 (접수 대기 중이거나 접수되어 체결을 기다리는 주문)
+            - 값이 없는 경우 빈 tuple, 있는 경우 generator를 반환합니다. list가 필요한 경우 list()로 감싸서 사용하세요.
+        """
+        if not self.orders_onwire:
+            return ()
+        return (
+            odr
+            for odr in self.orders_onwire.values()
+            if odr.code == code and odr.side == side
+        )
+
+    def get_pending_orders_any(
+        self, code: str, side: Literal["B", "S", "A", "C"]
+    ) -> bool:
+        """code 종목의 side 방향의 예약 주문의 존재 여부를 반환합니다.
+
+        Args:
+            code: 종목 코드, 예) '005930'
+            side: 주문 방향 ['B', 'S', 'A', 'C'] (Buy, Sell, Adjust, Cancel)
+        """
+        if not self.orders_onwire:
+            return False
+        return any(
+            odr
+            for odr in self.orders_onwire.values()
+            if odr.code == code and odr.side == side
+        )
+
+    def order_place(
+        self,
+        code: str,
+        isBuy: bool,
+        odrkind: Literal["01", "02", "03", "04", "10", "11", "12", "13", "14", "15"],
+        qty: int,
+        prc: int,
+        leverage: float,
+    ) -> Optional[KisErrApiLimit | KisErrNotEnoughMargin]:
+        """현금 주문
+
+        https://apiportal.koreainvestment.com/apiservice-apiservice?/uapi/domestic-futureoption/v1/trading/order
+
+        Args:
+            code: 종목코드 (선물 6자리 (예: A01603), 옵션 9자리 (예: B01603955))
+            isbuy: 매수주문 여부
+            odrkind: 주문유형
+                {01:지정가, 02:시장가, 03:조건부, 04:최유리, 00:지정가(IOC), 01:지정가(FOK), 02:시장가(IOC), 03:시장가(FOK), 04:최유리(IOC), 05:최유리(FOK)}
+            qty: 주문수량
+            prc: 주문가격
+            leverage: 레버리지, 증거금 계산에 사용
+        """
+        try:
+            self.http_client._api_limit_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return KisErrApiLimit(None)
+
+        # check margin and position
+        pedmrg, actmrg = self.margin
+        delta_mrg = prc * qty / leverage
+        pedmrg -= delta_mrg
+
+        posits = self.posits.setdefault(code, [0, 0])
+        delta_pos = qty if isBuy else -qty
+
+        if (pedmrg + actmrg) < 0:
+            actpos = posits[1]
+            # margin error occus only when the new order increases the absolute position
+            if (abs(actpos + delta_pos) > abs(actpos)) or (
+                abs(posits[0] + actpos + delta_pos) > abs(actpos)
+            ):
+                self.http_client._api_limit_queue.put_nowait(None)  # API token rollback
+                return KisErrNotEnoughMargin(
+                    {
+                        "action": "order_place",
+                        "current": actmrg,
+                        "required": delta_mrg,
+                    }
+                )
+
+        self.margin[0] = pedmrg
+        posits[0] += delta_pos
+
+        # Allocate pending order
+        omsid = self._get_omsid()
+        odr = self._mempool.alloc()
+        odr.init(omsid, code, "B" if isBuy else "S", odrkind, qty, prc, leverage)
+        self.orders_onwire[omsid] = odr
+
+        task = self._loop.create_task(
+            self._async_order_place(omsid, code, isBuy, odrkind, qty, prc),
+            # eager_start = True # type: ignore
+        )
+        self.bg_tasks.add(task)
+        task.add_done_callback(self.bg_tasks.discard)
+
+    def order_cancel(
+        self,
+        odrno: str,
+        code: str,
+        qty: int,
+        isAllQty: Literal["Y", "N"] = "Y",
+    ) -> Optional[KisErrApiLimit | KisErrOrderNotFund]:
+        """주문취소
+
+        https://apiportal.koreainvestment.com/apiservice-apiservice?/uapi/domestic-futureoption/v1/trading/order-rvsecncl
+
+        Args:
+            odrno: 원주문번호
+            code: 종목코드
+            qty: 주문수량 (전량 취소 시 0 입력)
+            isAllQty: 전량 주문 여부 ['Y', 'N'], default 'Y'
+        """
+        oodr = self.orders_onwait.setdefault(code, {}).get(odrno, None)
+        if oodr is None:
+            return KisErrOrderNotFund(odrno)
+
+        # If cancel is ongoing, return immediately to prevent duplicate cancel attempts.
+        if odrno in self.orders_onwire:
+            return
+
+        try:
+            self.http_client._api_limit_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return KisErrApiLimit(None)
+
+        # Allocate pending cancel,
+        # Cancel orders are special, key for orders_pending is not omsid, but the original order number(odrno)
+        odr = self._mempool.alloc()
+        odr.init(self._get_omsid(), code, "C", "00", qty, oodr.prc)
+        self.orders_onwire[odrno] = odr
+
+        task = self._loop.create_task(
+            self._async_order_cancel(odrno, qty, isAllQty),
             # eager_start = True
         )
         self.bg_tasks.add(task)

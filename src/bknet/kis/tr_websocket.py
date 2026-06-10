@@ -441,7 +441,7 @@ class WsKrxStkFutBook(WsKrxIdxFutBook):
     https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0ZFASP0
     """
 
-    TrId = "H0SFASP0"
+    TrId = "H0ZFASP0"
     TrLength = 38
 
 
@@ -451,5 +451,60 @@ class WsKrxStkFutExec(WsKrxIdxFutExec):
     https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0ZFCNT0
     """
 
-    TrId = "H0SFCNT0"
+    TrId = "H0ZFCNT0"
     TrLength = 50
+
+
+class WsKrxFutExecAlert(WebsocketTr):
+    """국내선물옵션 실시간체결통보
+
+    https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0IFCNI0
+    """
+
+    TrId = "H0IFCNI0"
+    TrLength = 22
+
+    CustId = 0
+    "[0] 고객 ID"
+    AcntNo = 1
+    "[1] 계좌번호"
+    OderNo = 2
+    "[2] 주문번호"
+    OoderNo = 3
+    "[3] 원주문번호"
+    SelnByovCls = 4
+    "[4] 매도/매수 구분, 01:매도, 02:매수"
+    RctfCls = 5
+    "[5] 정정/취소 구분, 0:정상, 1:정정, 2:취소"
+    OdrKind2 = 6
+    "[6] 주문종류2 L:주문접수통보, 0:체결통보"
+    StckShrnIscd = 7
+    "[7] 단축종목코드"
+    CntgQty = 8
+    "[8] 체결수량"
+    CntgUnPr = 9
+    "[9] 체결단가"
+    StckCntgHour = 10
+    "[10] 체결시간"
+    RfusYn = 11
+    "[11] 거부여부, 0:승인, 1:거부"
+    CntgYn = 12
+    "[12] 체결여부, 1:주문,정정,취소,거부, 2:체결"
+    AcntYn = 13
+    "[13] 접수여부, 1:주문접수, 2:확인, 3:취소(IOC/FOK)"
+    BrncNo = 14
+    "[14] 지점번호"
+    OderQty = 15
+    "[15] 주문수량"
+    AcntName = 16
+    "[16] 계좌명"
+    CntgIsNm = 17
+    "[17] 체결종목명"
+    OderCond = 18
+    "[18] 주문조건, 0:없음, 1:IOC, 2:FOK"
+    OrdGrp = 19
+    "[19] 주문그룹ID"
+    OrdGrpSeq = 20
+    "[20] 주문그룹SEQ"
+    OrderPrc = 21
+    "[21] 주문가격"
