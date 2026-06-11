@@ -425,7 +425,7 @@ class WsKrxComFutBook(WsKrxIdxFutBook):
     TrLength = 38
 
 
-class WsKrxComFutExec(WsKrxIdxFutExec):
+class WsKrxComFutExec(WebsocketTr):
     """국내상품선물체결 [KRX]
 
     https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0CFCNT0
@@ -433,6 +433,107 @@ class WsKrxComFutExec(WsKrxIdxFutExec):
 
     TrId = "H0CFCNT0"
     TrLength = 50
+
+    FutsShrnIscd = 0
+    "[0] 선물단축종목코드"
+    BsopHour = 1
+    "[1] 영업시간"
+    FutsPrdyVrss = 2
+    "[2] 선물전일대비"
+    PrdyVrssSign = 3
+    "[3] 선물전일대비부호"
+    FutsPrdyCtrt = 4
+    "[4] 선물전일대비율"
+    CntgPrc = 5
+    "[5] 체결가격"
+    Open = 6
+    "[6] 시가"
+    High = 7
+    "[7] 고가"
+    Low = 8
+    "[8] 저가"
+    CntgQty = 9
+    "[9] 체결수량"
+    AcmlQty = 10
+    "[10] 누적체결수량"
+    AcmlDvol = 11
+    "[11] 누적거래대금"
+    HtsThpr = 12
+    "[12] HTS이론가"
+    Basis = 13
+    "[13] 베이시스"
+    Dprt = 14
+    "[14] 괴리율"
+    NmscFctnStplPrc = 15
+    "[15] 근월물약정가"
+    FmscFctnStplPrc = 16
+    "[16] 원월물약정가"
+    SpredPrc = 17
+    "[17] 스프레드"
+    HtsOtstStplQty = 18
+    "[18] HTS미결제약정수량"
+    OtstStplQtyIcdc = 19
+    "[19] 미결제약정수량증감"
+    OprcHour = 20
+    "[20] 시가시간"
+    OprcVrssPrprSign = 21
+    "[21] 시가대비부호"
+    OprcVrssPrpr = 22
+    "[22] 시가대비"
+    HgprHour = 23
+    "[23] 고가시간"
+    HgprVrssPrprSign = 24
+    "[24] 고가대비부호"
+    HgprVrssPrpr = 25
+    "[25] 고가대비"
+    LwprHour = 26
+    "[26] 저가시간"
+    LwprVrssPrprSign = 27
+    "[27] 저가대비부호"
+    LwprVrssPrpr = 28
+    "[28] 저가대비"
+    ShnuRate = 29
+    "[29] 매수비율"
+    Cttr = 30
+    "[30] 체결강도"
+    Esdg = 31
+    "[31] 괴리도"
+    OtstStplRgbfQtyIcdc = 32
+    "[32] 미결제약정직전수량증감"
+    ThprBasis = 33
+    "[33] 이론베이시스"
+    Ap1 = 34
+    "[34] 매도호가1"
+    Bp1 = 35
+    "[35] 매수호가1"
+    Aq1 = 36
+    "[36] 매도호가1잔량"
+    Bq1 = 37
+    "[37] 매수호가1잔량"
+    SelnCntgCsnu = 38
+    "[38] 매도체결건수"
+    ShnuCntgCsnu = 39
+    "[39] 매수체결건수"
+    NtbyCntgCsnu = 40
+    "[40] 순매수체결건수"
+    SelnCntgSmtn = 41
+    "[41] 총체결수량"
+    ShnuCntgSmtn = 42
+    "[42] 총매수체결수량"
+    TotalAskpRsqn = 43
+    "[43] 총매도호가잔량"
+    TotalBidPRsqn = 44
+    "[44] 총매수호가잔량"
+    PrdyVolVrssAcmlVolRate = 45
+    "[45] 전일거래량대비등락률"
+    DscsBlTrAcmlQty = 46
+    "[46] 협의대량거래량"
+    DynmMxpr = 47
+    "[47] 실시간상한가"
+    DynmLlam = 48
+    "[48] 실시간하한가"
+    DynmPrcLimtYn = 49
+    "[49] 실시간가격제한구분"
 
 
 class WsKrxStkFutBook(WsKrxIdxFutBook):
@@ -445,14 +546,112 @@ class WsKrxStkFutBook(WsKrxIdxFutBook):
     TrLength = 38
 
 
-class WsKrxStkFutExec(WsKrxIdxFutExec):
+class WsKrxStkFutExec(WebsocketTr):
     """국내주식선물체결 [KRX]
 
     https://apiportal.koreainvestment.com/apiservice-apiservice?/tryitout/H0ZFCNT0
     """
 
     TrId = "H0ZFCNT0"
-    TrLength = 50
+    TrLength = 49
+
+    FutsShrnIscd = 0
+    "[0] 선물단축종목코드"
+    BsopHour = 1
+    "[1] 영업시간"
+    CntgPrc = 2
+    "[2] 체결가격"
+    PrdyVrssSign = 3
+    "[3] 전일대비부호"
+    PrdyVrss = 4
+    "[4] 전일대비"
+    FutsPrdyCtrt = 5
+    "[5] 선물전일대비율"
+    Open = 6
+    "[6] 시가"
+    High = 7
+    "[7] 고가"
+    Low = 8
+    "[8] 저가"
+    CntgQty = 9
+    "[9] 체결수량"
+    AcmlQty = 10
+    "[10] 누적체결수량"
+    AcmlDvol = 11
+    "[11] 누적거래대금"
+    HtsThpr = 12
+    "[12] HTS이론가"
+    Basis = 13
+    "[13] 베이시스"
+    Dprt = 14
+    "[14] 괴리율"
+    NmscFctnStplPrc = 15
+    "[15] 근월물약정가"
+    FmscFctnStplPrc = 16
+    "[16] 원월물약정가"
+    SpredPrc = 17
+    "[17] 스프레드"
+    HtsOtstStplQty = 18
+    "[18] HTS미결제약정수량"
+    OtstStplQtyIcdc = 19
+    "[19] 미결제약정수량증감"
+    OprcHour = 20
+    "[20] 시가시간"
+    OprcVrssPrprSign = 21
+    "[21] 시가대비부호"
+    OprcVrssPrpr = 22
+    "[22] 시가대비"
+    HgprHour = 23
+    "[23] 고가시간"
+    HgprVrssPrprSign = 24
+    "[24] 고가대비부호"
+    HgprVrssPrpr = 25
+    "[25] 고가대비"
+    LwprHour = 26
+    "[26] 저가시간"
+    LwprVrssPrprSign = 27
+    "[27] 저가대비부호"
+    LwprVrssPrpr = 28
+    "[28] 저가대비"
+    ShnuRate = 29
+    "[29] 매수비율"
+    Cttr = 30
+    "[30] 체결강도"
+    Esdg = 31
+    "[31] 괴리도"
+    OtstStplRgbfQtyIcdc = 32
+    "[32] 미결제약정직전수량증감"
+    ThprBasis = 33
+    "[33] 이론베이시스"
+    Ap1 = 34
+    "[34] 매도호가1"
+    Bp1 = 35
+    "[35] 매수호가1"
+    Aq1 = 36
+    "[36] 매도호가1잔량"
+    Bq1 = 37
+    "[37] 매수호가1잔량"
+    SelnCntgCsnu = 38
+    "[38] 매도체결건수"
+    ShnuCntgCsnu = 39
+    "[39] 매수체결건수"
+    NtbyCntgCsnu = 40
+    "[40] 순매수체결건수"
+    SelnCntgSmtn = 41
+    "[41] 총체결수량"
+    ShnuCntgSmtn = 42
+    "[42] 총매수체결수량"
+    TotalAskpRsqn = 43
+    "[43] 총매도호가잔량"
+    TotalBidPRsqn = 44
+    PrdyVolVrssAcmlVolRate = 45
+    "[45] 전일거래량대비등락률"
+    DynmMxpr = 46
+    "[46] 실시간상한가"
+    DynmLlam = 47
+    "[47] 실시간하한가"
+    DynmPrcLimtYn = 48
+    "[48] 실시간가격제한구분"
 
 
 class WsKrxFutExecAlert(WebsocketTr):
