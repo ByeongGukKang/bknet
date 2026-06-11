@@ -434,7 +434,7 @@ class WsKrxComFutExec(WebsocketTr):
     TrId = "H0CFCNT0"
     TrLength = 50
 
-    FutsShrnIscd = 0
+    Code = 0
     "[0] 선물단축종목코드"
     BsopHour = 1
     "[1] 영업시간"
@@ -510,19 +510,19 @@ class WsKrxComFutExec(WebsocketTr):
     "[36] 매도호가1잔량"
     Bq1 = 37
     "[37] 매수호가1잔량"
-    SelnCntgCsnu = 38
+    SellTrdCnt = 38
     "[38] 매도체결건수"
-    ShnuCntgCsnu = 39
+    BuyTrdCnt = 39
     "[39] 매수체결건수"
-    NtbyCntgCsnu = 40
+    NetBuyTrdCnt = 40
     "[40] 순매수체결건수"
-    SelnCntgSmtn = 41
-    "[41] 총체결수량"
-    ShnuCntgSmtn = 42
-    "[42] 총매수체결수량"
-    TotalAskpRsqn = 43
+    SellTvol = 41
+    "[41] 총매도수량"
+    BuyTvol = 42
+    "[42] 총매수수량"
+    AqSum = 43
     "[43] 총매도호가잔량"
-    TotalBidPRsqn = 44
+    BqSum = 44
     "[44] 총매수호가잔량"
     PrdyVolVrssAcmlVolRate = 45
     "[45] 전일거래량대비등락률"
@@ -555,7 +555,7 @@ class WsKrxStkFutExec(WebsocketTr):
     TrId = "H0ZFCNT0"
     TrLength = 49
 
-    FutsShrnIscd = 0
+    Code = 0
     "[0] 선물단축종목코드"
     BsopHour = 1
     "[1] 영업시간"
@@ -631,19 +631,20 @@ class WsKrxStkFutExec(WebsocketTr):
     "[36] 매도호가1잔량"
     Bq1 = 37
     "[37] 매수호가1잔량"
-    SelnCntgCsnu = 38
+    SellTrdCnt = 38
     "[38] 매도체결건수"
-    ShnuCntgCsnu = 39
+    BuyTrdCnt = 39
     "[39] 매수체결건수"
-    NtbyCntgCsnu = 40
+    NetBuyTrdCnt = 40
     "[40] 순매수체결건수"
-    SelnCntgSmtn = 41
-    "[41] 총체결수량"
-    ShnuCntgSmtn = 42
-    "[42] 총매수체결수량"
-    TotalAskpRsqn = 43
+    SellTvol = 41
+    "[41] 총매도수량"
+    BuyTvol = 42
+    "[42] 총매수수량"
+    AqSum = 43
     "[43] 총매도호가잔량"
-    TotalBidPRsqn = 44
+    BqSum = 44
+    "[44] 총매수호가잔량"
     PrdyVolVrssAcmlVolRate = 45
     "[45] 전일거래량대비등락률"
     DynmMxpr = 46
