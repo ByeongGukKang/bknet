@@ -13,11 +13,18 @@ class KisErrApiLimit(Error[None]):
     msg = "[Kis] API limit reached"
 
 
-class KisErrOrphanOrderExecuted(Error[str]):
+class KisErrApiRequestRejected(Error[Dict]):
+    data: Dict
+    "json message from Kis"
+    code = "KisErrApiRequestRejected"
+    msg = "[Kis] API request rejected"
+
+
+class KisErrOrphanOrderOccured(Error[str]):
     data: str
     "order_id"
-    code = "KisErrOrphanOrderExecuted"
-    msg = "[Kis] Orphan order executed"
+    code = "KisErrOrphanOrderOccured"
+    msg = "[Kis] Orphan order occurred"
 
 
 class KisErrOrderNotFund(Error[str]):

@@ -1,10 +1,12 @@
-from typing import Generic, TypedDict, TypeVar
+from decimal import Decimal
+from typing import NamedTuple, TypedDict, TypeVar, Union
 
 T = TypeVar("T")
+U = TypeVar("U")
 
 
 ### Error
-class Error(Generic[T]):
+class Error[T](Exception):
     data: T
     msg: str
     code: str
@@ -19,7 +21,25 @@ class Error(Generic[T]):
         return self.__str__()
 
 
+class Success[T](NamedTuple):
+    v: T
+    err: None = None
+
+
+class Failure[U](NamedTuple):
+    v: None
+    err: U
+
+
+type Errorable[T, U] = Success[T] | Failure[U]
+
+
 class SomethingNotEnough(TypedDict):
     action: str
-    current: float
-    required: float
+    current: Union[int, float, Decimal]
+    required: Union[int, float, Decimal]
+
+
+class UnknownValueReceived(TypedDict):
+    location: str
+    value: str
