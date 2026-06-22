@@ -37,6 +37,22 @@ class Macro:
         return coroutine(lambda: (yield))
 
     @staticmethod
+    def async_schedule(
+        coro: Callable[..., Coroutine], bg_task_set: set[asyncio.Task], *args, **kwargs
+    ):
+        """Run a coroutine in the background and add it to the provided set of background tasks.
+
+        Args:
+            coro: The coroutine function to run in the background.
+            bg_task_set: A set to which the created background task will be added. The task will be automatically removed from the set when it is done.
+            *args: Positional arguments to pass to the coroutine function.
+            **kwargs: Keyword arguments to pass to the coroutine function.
+        """
+        task = asyncio.get_running_loop().create_task(coro(*args, **kwargs))
+        bg_task_set.add(task)
+        task.add_done_callback(bg_task_set.discard)
+
+    @staticmethod
     def sleep(seconds: float):
         time.sleep(seconds)
 

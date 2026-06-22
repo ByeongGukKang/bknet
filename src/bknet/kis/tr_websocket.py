@@ -827,7 +827,7 @@ class WsKrxDevExecAlert(WebsocketTr):
     CntgYn = 12
     "[12] 체결여부, 1:주문,정정,취소,거부, 2:체결"
     AcntYn = 13
-    "[13] 접수여부, 1:주문접수, 2:확인, 3:취소(IOC/FOK)"
+    "[13] 접수여부, 1:주문접수, 2:확인, 3, 취소"
     BrncNo = 14
     "[14] 지점번호"
     OderQty = 15

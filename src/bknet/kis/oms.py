@@ -1133,8 +1133,8 @@ class KisKrStkOMS(ForceAsyncNew):
         return None
 
     def bind_ws_client(self, ws_client: KisWsClient, hts_id: str):
-        def _handle_WsKrxDevExecAlert(_: KisWsClient, msg: list[bytes]) -> None:
-            if msg[13] == b"1":  # Order Received message
+        def _handle_WsKrxStkExecAlert(_: KisWsClient, msg: list[bytes]) -> None:
+            if msg[14] == b"1":  # Order Received message
                 return
 
             oid = msg[2].decode()
@@ -1166,11 +1166,11 @@ class KisKrStkOMS(ForceAsyncNew):
                 # TODO Error handling
                 pass
 
-        ws_client._callbacks[WsKrxDevExecAlert.TrId.encode()] = (
-            WsKrxDevExecAlert.TrLength,
-            _handle_WsKrxDevExecAlert,
+        ws_client._callbacks[WsKrStkExecAlert.TrId.encode()] = (
+            WsKrStkExecAlert.TrLength,
+            _handle_WsKrxStkExecAlert,
         )
-        ws_client.subscribe(WsKrxDevExecAlert.TrId, hts_id)
+        ws_client.subscribe(WsKrStkExecAlert.TrId, hts_id)
 
     def schedule_update_balance(self):
         async_schedule(self.update_balance, self.bg_tasks)
@@ -1220,7 +1220,7 @@ class KisKrStkOMS(ForceAsyncNew):
                     posit = temp_posits.setdefault(code, [0, 0])
                     posit[1] = int(posit_msg["hldg_qty"])
                 if ctx_area_nk100.strip() == "":
-                    temp_margin[1] = int(resp_json["output2"]["dnca_tot_amt"])
+                    temp_margin[1] = int(resp_json["output2"][0]["dnca_tot_amt"])
                     break
         except Exception as e:
             isError = True
@@ -1333,16 +1333,18 @@ class KisKrStkOMS(ForceAsyncNew):
         )
 
     def get_onwire_orders_any(
-        self, code: str, side: Literal["B", "S", "A", "C"]
+        self, code: str, side: Optional[Literal["B", "S", "A", "C"]] = None
     ) -> bool:
         """code 종목의 side 방향의 OnWire 주문의 존재 여부를 반환합니다.
 
         Args:
-            code: 종목 코드, 예) '005930'
-            side: 주문 방향 ['B', 'S', 'A', 'C'] (Buy, Sell, Adjust, Cancel)
+            code: 종목코드, 예) '005930'
+            side: 주문방향 ['B', 'S', 'A', 'C'] (Buy, Sell, Adjust, Cancel), None이면 모든 주문
         """
         if not self.orders_onwire:
             return False
+        if side is None:
+            return True
         return any(
             odr
             for odr in self.orders_onwire.values()
@@ -1779,8 +1781,8 @@ class KisKrDevOMS(ForceAsyncNew):
                 self.on_order_filled(
                     self, code, isBuy, qty, prc
                 ) if err is None else self.on_error(self, err)
-            elif msg[5] == b"2":  # Cancel message
-                if msg[13] == b"3":  # IOC/FOK cancel
+            elif msg[13] == b"3":  # Cancel message
+                if msg[18] != b"0":  # IOC/FOK cancel
                     oOid = oid
                 else:  # Regular cancel
                     oOid = msg[3].decode()
@@ -1825,7 +1827,7 @@ class KisKrDevOMS(ForceAsyncNew):
             while True:
                 resp = await self.http_client.request(
                     method=RequestMethod.GET,  # type: ignore
-                    params=f"/uapi/domestic-futureoption/v1/trading/inquire-balance?CANO={self.cano}&ACNT_PRDT_CD={self.acnt_prdt_cd}&MGNA_DVSN=02&EXCC_STAT_CD=01&CTX_AREA_FK200={ctx_area_fk200}&CTX_AREA_NK200={ctx_area_nk200}",
+                    params=f"/uapi/domestic-futureoption/v1/trading/inquire-balance?CANO={self.cano}&ACNT_PRDT_CD={self.acnt_prdt_cd}&MGNA_DVSN=02&EXCC_STAT_CD=1&CTX_AREA_FK200={ctx_area_fk200}&CTX_AREA_NK200={ctx_area_nk200}",
                     headers=req_header,
                     timeout=self.timeout,
                 )
@@ -1847,7 +1849,7 @@ class KisKrDevOMS(ForceAsyncNew):
                     posits = temp_posits.setdefault(code, [0, 0])
                     posits[1] += int(posit_msg["cblc_qty"]) * sideSign
 
-                if ctx_area_nk200.strip() == "":
+                if len(posit_msgs) == 0:
                     temp_margin[1] = Decimal(resp_json["output2"]["ord_psbl_tota"])
                     break
         except Exception as e:
@@ -1856,15 +1858,19 @@ class KisKrDevOMS(ForceAsyncNew):
 
         req_header["tr_id"] = b"TTTO5201R"
         try:
-            from datetime import datetime, timedelta
+            from datetime import datetime, timedelta, timezone
 
-            today_str = (datetime.utcnow() + timedelta(hours=9)).strftime("%Y%m%d")
+            today_str = (datetime.now(timezone.utc) + timedelta(hours=9)).strftime(
+                "%Y%m%d"
+            )
             ctx_area_fk200 = ""
             ctx_area_nk200 = ""
             while True:
                 resp = await self.http_client.request(
                     method=RequestMethod.GET,  # type: ignore
-                    params=f"/uapi/domestic-futureoption/v1/trading/inquire-ccnl?CANO={self.cano}&ACNT_PRDT_CD={self.acnt_prdt_cd}&STRT_ORD_DT={today_str}&END_ORD_DT={today_str}&SLL_BUY_DVSN_CD=00&CCLD_NCCS_DVSN=02&SORT_SQN=AS&CTX_AREA_FK200={ctx_area_fk200}&CTX_AREA_NK200={ctx_area_nk200}",
+                    params=f"/uapi/domestic-futureoption/v1/trading/inquire-ccnl?CANO={self.cano}&ACNT_PRDT_CD={self.acnt_prdt_cd}&STRT_ORD_DT={today_str}&END_ORD_DT={today_str}&SLL_BUY_DVSN_CD=00&CCLD_NCCS_DVSN=02&SORT_SQN=AS&STRT_ODNO=0&PDNO="
+                    "&MKET_ID_CD="
+                    "&CTX_AREA_FK200={ctx_area_fk200}&CTX_AREA_NK200={ctx_area_nk200}",
                     headers=req_header,
                     timeout=self.timeout,
                 )
@@ -1963,16 +1969,18 @@ class KisKrDevOMS(ForceAsyncNew):
         )
 
     def get_onwire_orders_any(
-        self, code: str, side: Literal["B", "S", "A", "C"]
+        self, code: str, side: Optional[Literal["B", "S", "A", "C"]] = None
     ) -> bool:
         """code 종목의 side 방향의 OnWire 주문의 존재 여부를 반환합니다.
 
         Args:
-            code: 종목 코드, 예) '005930'
-            side: 주문 방향 ['B', 'S', 'A', 'C'] (Buy, Sell, Adjust, Cancel)
+            code: 종목코드, 예) '005930'
+            side: 주문방향 ['B', 'S', 'A', 'C'] (Buy, Sell, Adjust, Cancel), None이면 모든 주문
         """
         if not self.orders_onwire:
             return False
+        if side is None:
+            return True
         return any(
             odr
             for odr in self.orders_onwire.values()
@@ -1996,7 +2004,7 @@ class KisKrDevOMS(ForceAsyncNew):
             code: 종목코드 (선물 6자리 (예: A01603), 옵션 9자리 (예: B01603955))
             isbuy: 매수주문 여부
             odrkind: 주문유형
-                {01:지정가, 02:시장가, 03:조건부, 04:최유리, 00:지정가(IOC), 01:지정가(FOK), 02:시장가(IOC), 03:시장가(FOK), 04:최유리(IOC), 05:최유리(FOK)}
+                {01:지정가, 02:시장가, 03:조건부, 04:최유리, 10:지정가(IOC), 11:지정가(FOK), 12:시장가(IOC), 13:시장가(FOK), 14:최유리(IOC), 15:최유리(FOK)}
             qty: 주문수량
             prc: 주문가격
             leverage: 레버리지, 증거금 계산에 사용

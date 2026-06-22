@@ -1,7 +1,7 @@
 import io
 import zipfile
 from decimal import Decimal
-from typing import Dict, Literal, TypedDict, Union
+from typing import Dict, Literal, NotRequired, TypedDict, Union
 
 import pandas as pd
 from curl_cffi import requests
@@ -95,7 +95,57 @@ class KisRestKrStock:
 
 
 class KisRestKrDerivativesResult:
-    class marginRatio(TypedDict):
+    class FutOptPrice(TypedDict):
+        class _output1(TypedDict):  # type: ignore
+            name: str
+            price: str
+            prdyVrss: str
+            prdyVrssSign: str
+            prdyClose: str
+            prdyCtrt: str
+            acmlTvol: str
+            acmlTval: str
+            oiQty: str
+            oiQtyDiff: str
+            open: str
+            high: str
+            low: str
+            maxprice: str
+            minprice: str
+            basis: str
+            basePrice: str
+            theoryPrice: str
+            dprt: str
+            circitBreakMaxPrice: str
+            circitBreakMinPrice: str
+            lastTradeDate: str
+            remainMaturity: str
+            histHigh: str
+            histLow: str
+            optDelta: str
+            optGamma: str
+            optTheta: str
+            optVega: str
+            optRho: str
+            histVol: NotRequired[str]
+            impliedVol: NotRequired[str]
+            marketBasis: str
+            exercisePrice: NotRequired[str]
+
+        output1: _output1
+
+        class _output2_3(TypedDict):  # type: ignore
+            code: str
+            name: str
+            price: str
+            prdyVrssSign: str
+            prdyVrss: str
+            prdyVrssCtrt: str
+
+        output2: _output2_3
+        output3: _output2_3
+
+    class MarginRatio(TypedDict):
         code: str
         name: str
         initMrgRatio: Decimal
@@ -104,7 +154,7 @@ class KisRestKrDerivativesResult:
         multipler: Decimal
         mrgPerUnit: Decimal
 
-    class histPrice1(TypedDict):
+    class HistPrice1(TypedDict):
         prdyVrss: float
         "전일대비"
         prdyVrssSign: str
@@ -166,7 +216,7 @@ class KisRestKrDerivativesResult:
         dispersionRatio: float
         "괴리도"
 
-    class histPrice2(TypedDict):
+    class HistPrice2(TypedDict):
         date: str
         "영업일자"
         close: float
@@ -187,17 +237,115 @@ class KisRestKrDerivativesResult:
 
 class KisRestKrDerivatives:
     @staticmethod
+    async def futopt_price(
+        httpClient: KisHttpClient,
+        mkrt_div_code: Literal["F", "O", "JF", "JO", "CF", "CM", "EU"],
+        code: str,
+    ) -> Errorable[
+        KisRestKrDerivativesResult.FutOptPrice,
+        Union[KisErrApiRequestRejected, KisErrPython],
+    ]:
+        """선물옵션 시세[v1_국내선물-006
+
+        https://apiportal.koreainvestment.com/apiservice-apiservice?/uapi/domestic-futureoption/v1/quotations/inquire-price
+
+        Args:
+            httpClient: KisHttpClient
+            mkrt_div_code: Literal["F", "O", "JF", "JO", "CF", "CM", "EU"]
+                F: 지수선물, O:지수옵션, JF: 주식선물, JO:주식옵션, CF: 상품선물, CM: 야간선물, EU: 야간옵션
+            code: str (e.g. "101S03")
+        """
+        try:
+            req_headers: Dict[str, bytes] = httpClient.client.headers.copy()  # type: ignore
+            req_headers["tr_id"] = b"FHMIF10000000"
+
+            resp = await httpClient.request(
+                method=RequestMethod.GET,  # type: ignore
+                params=f"/uapi/domestic-futureoption/v1/quotations/inquire-price?FID_COND_MRKT_DIV_CODE={mkrt_div_code}&FID_INPUT_ISCD={code}",
+                headers=req_headers,
+            )
+            resp_json = orjson_loads(resp.content)
+
+            if resp_json.get("rt_cd", "") != "0":
+                raise KisErrApiRequestRejected(resp_json)
+            output1: dict = resp_json["output1"]
+            output2: dict = resp_json["output2"]
+            output3: dict = resp_json["output3"]
+
+            result: KisRestKrDerivativesResult.FutOptPrice = {  # type: ignore
+                "output1": {
+                    "name": output1["hts_kor_isnm"],
+                    "price": output1["futs_prpr"],
+                    "prdyVrss": output1["futs_prdy_vrss"],
+                    "prdyVrssSign": output1["prdy_vrss_sign"],
+                    "prdyClose": output1["futs_prdy_clpr"],
+                    "prdyCtrt": output1["futs_prdy_ctrt"],
+                    "acmlTvol": output1["acml_vol"],
+                    "acmlTval": output1["acml_tr_pbmn"],
+                    "oiQty": output1["hts_otst_stpl_qty"],
+                    "oiQtyDiff": output1["otst_stpl_qty_icdc"],
+                    "open": output1["futs_oprc"],
+                    "high": output1["futs_hgpr"],
+                    "low": output1["futs_lwpr"],
+                    "maxprice": output1["futs_hgpr"],
+                    "minprice": output1["futs_lwpr"],
+                    "basis": output1["basis"],
+                    "basePrice": output1["futs_sdpr"],
+                    "theoryPrice": output1["hts_thpr"],
+                    "dprt": output1["dprt"],
+                    "circitBreakMaxPrice": output1["crbr_aply_mxpr"],
+                    "circitBreakMinPrice": output1["crbr_aply_llam"],
+                    "lastTradeDate": output1["futs_last_tr_date"],
+                    "remainMaturity": output1["hts_rmnn_dynu"],
+                    "histHigh": output1["futs_lstn_medm_hgpr"],
+                    "histLow": output1["futs_lstn_medm_lwpr"],
+                    "optDelta": output1["delta_val"],
+                    "optGamma": output1["gama"],
+                    "optTheta": output1["theta"],
+                    "optVega": output1["vega"],
+                    "optRho": output1["rho"],
+                    "histVol": output1.get("hist_vltl"),
+                    "impliedVol": output1.get("hts_ints_vltl"),
+                    "marketBasis": output1["mrkt_basis"],
+                    "exercisePrice": output1.get("acpr"),
+                },
+                "output2": {
+                    "code": output2["bstp_cls_code"],
+                    "name": output2["hts_kor_isnm"],
+                    "price": output2["bstp_nmix_prpr"],
+                    "prdyVrssSign": output2["prdy_vrss_sign"],
+                    "prdyVrss": output2["bstp_nmix_prdy_vrss"],
+                    "prdyVrssCtrt": output2["bstp_nmix_prdy_ctrt"],
+                },
+                "output3": {
+                    "code": output3["bstp_cls_code"],
+                    "name": output3["hts_kor_isnm"],
+                    "price": output3["bstp_nmix_prpr"],
+                    "prdyVrssSign": output3["prdy_vrss_sign"],
+                    "prdyVrss": output3["bstp_nmix_prdy_vrss"],
+                    "prdyVrssCtrt": output3["bstp_nmix_prdy_ctrt"],
+                },
+            }
+
+        except KisErrApiRequestRejected as e:
+            return Failure(None, e)
+        except Exception as e:
+            return Failure(None, KisErrPython(e))
+        else:
+            return Success(result)
+
+    @staticmethod
     async def futopt_margin_ratio(
         httpClient: KisHttpClient, target_date: str
     ) -> Errorable[
-        Dict[str, KisRestKrDerivativesResult.marginRatio],
+        Dict[str, KisRestKrDerivativesResult.MarginRatio],
         Union[KisErrApiRequestRejected, KisErrPython],
     ]:
         try:
             req_headers: Dict[str, bytes] = httpClient.client.headers.copy()  # type: ignore
             req_headers["tr_id"] = b"TTTO6032R"
 
-            mrgTable: Dict[str, KisRestKrDerivativesResult.marginRatio] = {}
+            mrgTable: Dict[str, KisRestKrDerivativesResult.MarginRatio] = {}
             ctx_area_nk200 = ""
             while True:
                 if ctx_area_nk200 != "":
