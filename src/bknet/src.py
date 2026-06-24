@@ -38,7 +38,10 @@ class Macro:
 
     @staticmethod
     def async_schedule(
-        coro: Callable[..., Coroutine], bg_task_set: set[asyncio.Task], *args, **kwargs
+        coro: Callable[..., Coroutine],
+        bg_task_set: set[asyncio.Task],
+        *args,
+        **kwargs,
     ):
         """Run a coroutine in the background and add it to the provided set of background tasks.
 
@@ -51,6 +54,36 @@ class Macro:
         task = asyncio.get_running_loop().create_task(coro(*args, **kwargs))
         bg_task_set.add(task)
         task.add_done_callback(bg_task_set.discard)
+
+    @staticmethod
+    def async_chain(
+        coro1: Callable[..., Coroutine],
+        coro2: Callable[..., Coroutine],
+        after: Optional[float] = None,
+        coro1_args: Optional[tuple] = None,
+        coro2_args: Optional[tuple] = None,
+    ) -> Callable[[], Coroutine]:
+        async def chain():
+            await coro1(*(coro1_args or ()))
+            if after is not None:
+                await asyncio.sleep(after)
+            await coro2(*(coro2_args or ()))
+
+        return chain
+
+    @staticmethod
+    def async_add_callback(
+        coro: Callable[..., Coroutine],
+        callback: Callable,
+        coro_args: Optional[tuple] = None,
+        callback_args: Optional[tuple] = None,
+    ) -> Callable[[], Coroutine]:
+        async def wrapper():
+            result = await coro(*(coro_args or ()))
+            callback(*(callback_args or ()))
+            return result
+
+        return wrapper
 
     @staticmethod
     def sleep(seconds: float):
@@ -131,7 +164,10 @@ def run_system(main: Coroutine):
 
 
 def async_schedule(
-    coro: Callable[..., Coroutine], bg_task_set: set[asyncio.Task], *args, **kwargs
+    coro: Callable[..., Coroutine],
+    bg_task_set: set[asyncio.Task],
+    *args,
+    **kwargs,
 ):
     """Run a coroutine in the background and add it to the provided set of background tasks.
 
