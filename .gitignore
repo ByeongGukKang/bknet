@@ -15,6 +15,7 @@ wheels/
 
 # Personal codes
 any.py
+trade/
 tests_private/
 data_collect/
 research/
