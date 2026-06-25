@@ -1343,12 +1343,10 @@ class KisKrStkOMS(ForceAsyncNew):
         """
         if not self.orders_onwire:
             return False
-        if side is None:
-            return True
         return any(
             odr
             for odr in self.orders_onwire.values()
-            if odr.code == code and odr.side == side
+            if odr.code == code and (side is None or odr.side == side)
         )
 
     def order_cash(
@@ -1979,12 +1977,10 @@ class KisKrDevOMS(ForceAsyncNew):
         """
         if not self.orders_onwire:
             return False
-        if side is None:
-            return True
         return any(
             odr
             for odr in self.orders_onwire.values()
-            if odr.code == code and odr.side == side
+            if odr.code == code and (side is None or odr.side == side)
         )
 
     def order_place(
